@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% from "_macros.html" import hidden %}
+{% block title %}{{ fname }}{% endblock %}
+{% block body %}
+<p><a href="/history">← 返回历史</a></p>
+<h1 class="mono">{{ fname }}</h1>
+<div class="card">
+  <div class="card-head">
+    <h2>当前配置 → 这个版本</h2>
+    <form method="post" action="/history/{{ fname }}/restore" data-confirm="把配置恢复到 {{ fname }}？当前配置会先存档。">
+      {{ hidden(s) }}<button class="secondary" type="submit">恢复到这个版本</button>
+    </form>
+  </div>
+  <p class="small muted">红色是当前有、这个版本没有的行；绿色是恢复后会出现的行。</p>
+  <div class="diff">{% for line in diff.splitlines() %}<div class="{{ 'add' if line.startswith('+') and not line.startswith('+++') else 'del' if line.startswith('-') and not line.startswith('---') else 'hunk' if line.startswith('@@') else '' }}">{{ line }}</div>{% endfor %}</div>
+</div>
+{% endblock %}

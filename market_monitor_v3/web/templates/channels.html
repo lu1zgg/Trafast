@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% from "_macros.html" import hidden, check, text, secret, route %}
+{% block title %}推送渠道{% endblock %}
+
+{% macro status(ch) -%}
+{% set c = st.channels.get(ch) if st else none %}
+{% if c is none %}<span class="pill">未运行</span>
+{% elif c.paused %}<span class="pill bad">暂停：{{ c.reason }}</span>
+{% else %}<span class="pill ok">正常</span>{% endif %}
+{%- endmacro %}
+
+{% macro actions(ch) -%}
+<div class="buttons">
+  <form method="post" action="/channels/check">{{ hidden(s) }}<input type="hidden" name="channel" value="{{ ch }}"><button class="secondary" type="submit">检查连接</button></form>
+  <form method="post" action="/channels/test">{{ hidden(s) }}<input type="hidden" name="channel" value="{{ ch }}"><input type="hidden" name="kind" value="plain"><button class="secondary" type="submit">发测试消息</button></form>
+  <form method="post" action="/channels/test">{{ hidden(s) }}<input type="hidden" name="channel" value="{{ ch }}"><input type="hidden" name="kind" value="sample"><button class="secondary" type="submit">发一条示例告警</button></form>
+</div>
+{%- endmacro %}
+
+{% block body %}
+<h1>推送渠道</h1>
+<p class="muted">可以同时开多个渠道，每个渠道单独选择接收哪些消息。改 token 或开关渠道后监控会自动重启（约 15 秒）；只改接收范围立即生效。</p>
+
+<div class="card">
+  <div class="card-head"><h2>Telegram</h2>{{ status("telegram") }}</div>
+  <form method="post" action="/channels/telegram">
+    {{ hidden(s, rev) }}
+    {{ check("enabled", cfg.telegram.enabled, "启用 Telegram 推送") }}
+    <div class="fields">
+      {{ secret("token", tg_token, "机器人 token", "找 @BotFather 创建机器人后拿到，形如 123456789:AA…") }}
+      {{ text("chat_id", cfg.telegram.chat_id if cfg.telegram.chat_id else "", "群组 ID", "超级群是 -100 开头的负数。怎么查见 README 的 Telegram 一节", "-1001234567890") }}
+      {{ text("admin_user_ids", cfg.telegram.admin_user_ids|join(", "), "管理员用户 ID", "只有这些人能在群里用 /mute 等修改类命令；留空 = 群里所有人都能用", "多个用逗号分开") }}
+    </div>
+    <div class="checks">
+      {{ check("commands", cfg.telegram.commands, "响应群里的命令（/status /mute 等）") }}
+      {{ check("feedback_buttons", cfg.telegram.feedback_buttons, "告警下面带“有用 / 噪音”按钮") }}
+      {{ check("silent_extension_replies", cfg.telegram.silent_extension_replies, "“继续扩大”的回复静音推送") }}
+    </div>
+    {{ route("tg", cfg.telegram.route) }}
+    <div class="buttons"><button type="submit">保存 Telegram 设置</button></div>
+  </form>
+  {{ actions("telegram") }}
+</div>
+
+<div class="card">
+  <div class="card-head">
+    <h2>Discord</h2>
+    <span>{{ status("discord") }}
+      {% if st and st.discord_gateway is not none %}{% if st.discord_gateway %}<span class="pill ok">按钮和命令已连接</span>{% else %}<span class="pill warn">按钮和命令连接中</span>{% endif %}{% endif %}</span>
+  </div>
+  <form method="post" action="/channels/discord">
+    {{ hidden(s, rev) }}
+    {{ check("enabled", cfg.discord.enabled, "启用 Discord 推送") }}
+    <div class="fields">
+      {{ secret("token", dc_token, "机器人 token", "Discord 开发者后台 → 你的应用 → Bot → Reset Token") }}
+      {{ text("channel_id", cfg.discord.channel_id, "频道 ID", "Discord 设置 → 高级 → 打开开发者模式，然后右键频道 →“复制频道 ID”", "1234567890123456789") }}
+      {{ text("admin_user_ids", cfg.discord.admin_user_ids|join(", "), "管理员用户 ID", "只有这些人能用 /mute /unmute；留空 = 频道里所有人都能用", "多个用逗号分开") }}
+    </div>
+    <div class="checks">
+      {{ check("commands", cfg.discord.commands, "注册斜杠命令（/status /mute /report 等）") }}
+      {{ check("feedback_buttons", cfg.discord.feedback_buttons, "告警下面带“有用 / 噪音”按钮") }}
+    </div>
+    {{ route("dc", cfg.discord.route) }}
+    <div class="buttons"><button type="submit">保存 Discord 设置</button></div>
+  </form>
+  {{ actions("discord") }}
+  {% if s.discord_invite %}
+  <div class="note">
+    <b>把机器人邀请进服务器：</b>打开下面的链接，选你的服务器授权（已包含发消息、嵌入链接和斜杠命令所需权限）。
+    <div class="copy-row"><input type="text" id="dc-invite" value="{{ s.discord_invite }}" readonly><button class="secondary small" type="button" data-copy="dc-invite">复制</button></div>
+  </div>
+  {% else %}
+  <p class="small muted">填好 token 后点“检查连接”，这里会给出邀请机器人进服务器的链接。</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>告警样式预览</h2>
+  <p class="small muted">示例数据，不是真实行情。Telegram 原样显示；Discord 显示为带颜色边条的卡片（绿涨红跌）。</p>
+  <pre class="preview">{{ sample|safe }}</pre>
+</div>
+{% endblock %}

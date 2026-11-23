@@ -22,8 +22,9 @@ fi
 NEW="$(git rev-parse --short HEAD)"
 echo "==> 代码 $OLD → $NEW"
 
-"$SRC/.venv/bin/pip" install -q "$SRC[longbridge]" || "$SRC/.venv/bin/pip" install -q "$SRC"
+"$SRC/.venv/bin/pip" install -q "$SRC[longbridge,web]" || "$SRC/.venv/bin/pip" install -q "$SRC[web]"
 sed "s#/opt/market-monitor#$SRC#g" "$SRC/deploy/market-monitor.service" >/etc/systemd/system/market-monitor.service
+sed "s#/opt/market-monitor#$SRC#g" "$SRC/deploy/market-monitor-web.service" >/etc/systemd/system/market-monitor-web.service
 sed "s#/opt/market-monitor#$SRC#g" "$SRC/deploy/mm" >/usr/local/bin/mm
 chmod 0755 /usr/local/bin/mm
 systemctl daemon-reload
@@ -33,6 +34,9 @@ mm check-config
 
 echo "==> 重启服务"
 systemctl restart market-monitor
+if systemctl is-enabled --quiet market-monitor-web 2>/dev/null; then
+    systemctl restart market-monitor-web
+fi
 sleep 5
 systemctl --no-pager --lines=15 status market-monitor || true
 echo "回滚：sudo bash deploy/upgrade.sh $OLD"

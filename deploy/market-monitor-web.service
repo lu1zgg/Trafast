@@ -1,0 +1,42 @@
+# 网页管理后台。install.sh 会把 /opt/market-monitor 换成仓库实际路径后装到 /etc/systemd/system/，
+# setup-web.sh 负责启用。只听 127.0.0.1，由 Caddy 反向代理出 HTTPS。
+[Unit]
+Description=Trafast web admin panel
+After=network-online.target market-monitor.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# mmweb 的主组是 monitor：能读写 /etc/market-monitor（配置、密钥、历史版本）、连监控的控制通道，
+# 但不能动监控的数据库以外的任何东西。
+User=mmweb
+Group=monitor
+Environment=HOME=/var/lib/market-monitor-web
+Environment=PYTHONUNBUFFERED=1
+WorkingDirectory=/var/lib/market-monitor-web
+ExecStart=/opt/market-monitor/.venv/bin/monitor web --config /etc/market-monitor/config.toml
+Restart=always
+RestartSec=3
+StateDirectory=market-monitor-web
+StateDirectoryMode=0700
+UMask=0027
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/etc/market-monitor
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+CapabilityBoundingSet=
+MemoryMax=300M
+
+[Install]
+WantedBy=multi-user.target

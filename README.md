@@ -1,6 +1,6 @@
 # Trafast · 异动监控 V3
 
-美股正股（含盘前、盘后、夜盘）和加密货币现货的价格异动监控，推送到 Telegram 群。
+美股正股（含盘前、盘后、夜盘）和加密货币现货的价格异动监控，推送到 Telegram 群、Discord 频道（可以同时开），也能转发 TradingView 告警。标的、规则、推送渠道都可以在网页管理后台里改。
 
 - 美股：长桥 OpenAPI 1 分钟 K 线，10 只：NVDA、GOOGL、MU、SNDK、META、STX、INTC、BE、TSLA、SPCX
 - 加密：Binance 现货 1 分钟 K 线，BTC、ETH、SOL
@@ -15,6 +15,9 @@
 | Telegram 推送（发件箱、重试、编辑、回复）、命令、👍/👎 反馈 | 完成，用模拟 Telegram 测过 |
 | Binance 数据源（断线重连、补数、缺口补齐） | 完成，用本地模拟服务器测过断线、重复、丢推送 |
 | 健康检查、运维消息、日报、心跳、备份 | 完成 |
+| Discord 推送（嵌入卡片、按钮、斜杠命令） | 完成，用模拟 Discord 测过，还没连真实服务器 |
+| 网页管理后台（密码 + 两步验证） | 完成，有测试 |
+| TradingView 告警转发 | 完成，用模拟 webhook 测过 |
 | 长桥数据源 | 代码写好，**还没接通真实账号**，接通步骤见下文 |
 | 真实行情回放 | 还没做：开发环境连不上 Binance。部署后跑 `sudo mm replay` 看实际消息量 |
 
@@ -42,7 +45,7 @@ ETH 地板 × 1.2，SOL × 1.4。`sudo mm check-config` 会打印当前生效的
 
 ## 部署到德国 VPS
 
-要求：Debian 12 或 Ubuntu 24.04，1 核 1 GB 足够，**不需要开任何入站端口**（机器人用长轮询收消息）。
+要求：Debian 12 或 Ubuntu 24.04，1 核 1 GB 足够。只跑监控**不需要开任何入站端口**（机器人用长轮询收消息）；开网页后台时要放行 80 和 443 给 Caddy。
 
 ### 1. 拉代码（私有仓库用只读 Deploy key）
 
@@ -101,6 +104,89 @@ journalctl -u market-monitor -f
 ### 5. 外部心跳（推荐）
 
 服务死掉或 VPS 断网时，它自己发不出消息。在 healthchecks.io 之类的服务建一个检查（周期 1 分钟、宽限 5 分钟），把 ping 地址填进 `secrets.env` 的 `HEARTBEAT_URL="…"`，再 `sudo systemctl restart market-monitor`。Telegram 发不出去时它会 ping `<地址>/fail`。
+
+## 推送样式
+
+🟢 涨、🔴 跌，标在代码前面；价格带 `$`，价格、涨跌幅、成交额、倍数在 Telegram 里加粗显示。多窗口和成交额用分割线分成单独的块；成交额按大小写成 `$845.30K`、`$3.62M`、`$1.20B`。同一条联动消息里的每个标的都按同样的完整格式展开（太多放不下时，后面的改成紧凑格式并注明还有几个）。
+
+```
+🔴 NVDA -1.9%｜1 分钟｜L3 剧烈
+现价 $134.03（盘前）｜起点 $136.66
+快速通道：位移很大，收盘即推
+────────────────
+多窗口
+1 分钟 -1.9%｜5 分钟 -2.4%｜15 分钟 -2.7%
+────────────────
+成交额
+1 分钟 $3.62M｜该时段常态的 2.1 倍
+────────────────
+北京 11-23 19:58｜美东 06:58
+━━━━━━━━━━━━━━━━
+同时异动（1）
+🔴 INTC -1.8%｜1 分钟｜L2 显著
+……（同样的完整格式）
+```
+
+Discord 里是同样的内容，放在左边带颜色竖条的卡片里（绿涨红跌）。网页后台的「推送渠道」页可以预览，也可以一键往群里发一条示例。
+
+## 网页管理后台
+
+在浏览器里加减标的、调规则、配置 Telegram / Discord / TradingView、看运行状态和最近的告警。是一个单独的服务（`market-monitor-web`），只听本机 `127.0.0.1:8787`，由 Caddy 反向代理出 HTTPS。
+
+安全设计：
+
+- 只有一个管理员账号，**只能在服务器上用 `sudo mm web-passwd` 创建**，网页上没有注册入口。登录要密码 + 手机验证器（TOTP）上的 6 位数字。
+- 同一来源连续输错 5 次锁 15 分钟，全站累计错太多也会整体锁定；锁定和每次登录都会发运维消息到群里。
+- 会话 12 小时过期，Cookie 只走 HTTPS（`HttpOnly`、`SameSite=Strict`），所有修改都校验 CSRF。
+- 密钥（token、长桥凭据）只能写入，页面上只显示「已设置，末 4 位」，从不回显原文。
+- 每次保存前用和监控相同的规则完整校验，不通过不写；旧配置自动存档，可以在「历史与审计」里对比和一键恢复；所有操作记审计日志。
+- 后台以单独的 `mmweb` 用户运行，监控进程对配置只读。两者只通过本机 unix socket 通信。
+
+### 开启
+
+1. 准备一个域名（或子域名），在 DNS 里加一条 A 记录指向 VPS 的 IP。
+2. 在 VPS 上：
+   ```bash
+   cd /opt/market-monitor
+   sudo bash deploy/install.sh                  # 老安装先重跑一次：装后台依赖、建 mmweb 用户、调整配置文件权限
+   sudo bash deploy/setup-web.sh 你的域名        # 装 Caddy、自动申请 HTTPS 证书、启动后台
+   ```
+   `setup-web.sh` 第一次运行时会接着执行 `mm web-passwd`：设用户名和密码（至少 12 位），用手机验证器（Google Authenticator、Microsoft Authenticator、1Password 等）扫终端里的二维码，再输入一次 6 位数字确认。
+3. 浏览器打开 `https://你的域名`。
+
+不想对外开放的话：`sudo bash deploy/setup-web.sh --local-only`，然后从自己电脑 `ssh -L 8787:127.0.0.1:8787 用户名@VPS地址`，浏览器开 `http://localhost:8787`（如果浏览器登录后又跳回登录页，把 `config.toml` 里 `[web] cookie_secure` 改成 `false` 再 `sudo systemctl restart market-monitor-web`）。
+
+忘记密码或换手机：再运行一次 `sudo mm web-passwd`，然后 `sudo systemctl restart market-monitor-web` 让所有旧登录失效。
+
+### 改了什么时候生效
+
+- 规则、渠道接收范围、TradingView 设置：保存后立即生效。
+- 标的、市场开关、渠道 token 和开关、数据源密钥：监控进程会自己退出，由 systemd 5 秒后拉起，十几秒后生效（启动时会补齐中间的 K 线）。
+- 也可以继续直接编辑 `/etc/market-monitor/config.toml`。网页保存时如果发现文件在你打开页面后被改过，会拒绝覆盖，提示刷新。
+
+## Discord 推送
+
+1. 打开 [Discord 开发者后台](https://discord.com/developers/applications) → New Application → 左边 Bot → Reset Token，复制 token。
+2. 在 Discord 设置 → 高级里打开「开发者模式」，右键要推送的频道 →「复制频道 ID」。
+3. 网页后台「推送渠道」→ Discord：填 token 和频道 ID，勾「启用」，保存；再点「检查连接」，页面会给出邀请链接，打开它把机器人拉进你的服务器。
+   不用后台的话：token 填进 `secrets.env` 的 `DISCORD_BOT_TOKEN`，`config.toml` 里 `[discord] enabled = true`、`channel_id = "…"`，然后 `sudo mm test-discord`。
+4. 告警下面有「有用 / 噪音」按钮，频道里可以用斜杠命令 `/status` `/mute` `/unmute` `/mutes` `/params` `/report`。不需要开任何特权 intent。
+
+每个渠道可以单独选择接收哪些消息（异动告警、最低级别、美股或加密、TradingView、运维消息、日报），例如 Telegram 收全部、Discord 只收 L3。
+
+## TradingView 告警转发
+
+把 TradingView 上自己设的价格、指标、策略告警，用同样的卡片样式转发到 Telegram / Discord。
+
+1. 网页后台「TradingView」页勾选启用并保存，页面会生成一个带密钥的专用地址 `https://你的域名/hooks/tradingview/…`。地址泄露了可以一键更换。
+2. TradingView 建告警 →「通知」→ 勾选 Webhook URL，粘贴这个地址。需要 TradingView 付费套餐，并且账号开启了两步验证（TradingView 的要求）。
+3. 「消息」一栏推荐写 JSON，TradingView 会替换 `{{…}}` 占位符：
+   ```json
+   {"ticker": "{{ticker}}", "exchange": "{{exchange}}", "price": {{close}}, "interval": "{{interval}}", "action": "buy", "message": "突破前高"}
+   ```
+   `action` 写 buy / long 显示 🟢，sell / short 显示 🔴。不是 JSON 的消息按原文转发。
+
+有限流（默认每分钟最多 20 条）和去重（相同内容 60 秒内只发一次），防止告警写错时刷屏。
 
 ## 接通长桥（美股）
 
@@ -163,11 +249,12 @@ journalctl -u market-monitor -f
 | `/report` | 立即生成最近 24 小时日报 |
 | `/help` | 命令说明 |
 
-告警下面的 👍/👎 记录这条有没有用，进日报，用来校准。命令也可以在 VPS 上用：`sudo mm status`、`sudo mm ctl mute MU 2h`、`sudo mm ctl unmute all`。
+Discord 里用同名的斜杠命令（`/mute` 的标的和时长是两个参数）。告警下面的 👍/👎 记录这条有没有用，进日报，用来校准。命令也可以在 VPS 上用：`sudo mm status`、`sudo mm ctl mute MU 2h`、`sudo mm ctl unmute all`。
 
 ## 调参和回放
 
-- 改 `config.toml` 后 `sudo mm check-config`，再 `sudo systemctl reload market-monitor` 热加载规则参数；标的、群组、市场开关的变化要 `restart`。
+- 最方便的是在网页后台「规则」页改：保存即生效，旧版本自动存档。
+- 也可以直接改 `config.toml`，然后 `sudo mm check-config`，再 `sudo systemctl reload market-monitor` 热加载规则参数；标的、推送渠道、市场开关的变化要 `restart`。
 - 换档位：`[rules] preset = "balanced"` 或 `"conservative"`。改之前可以先比较：`sudo mm replay --days 7 --preset balanced`。
 - 单个时段微调，例如盘中 Z 改成 5.5：
   ```toml
@@ -182,6 +269,7 @@ journalctl -u market-monitor -f
 
 ```bash
 systemctl status market-monitor
+systemctl status market-monitor-web        # 网页后台
 journalctl -u market-monitor -f            # 日志（token 等密钥会自动打码）
 journalctl -u market-monitor --since "1 hour ago"
 sudo mm status
@@ -206,7 +294,7 @@ sudo bash deploy/upgrade.sh 1a2b3c4   # 切到指定提交或标签（回滚）
 
 ```bash
 python3 -m venv .venv && . .venv/bin/activate
-pip install -e ".[test,longbridge]" ruff
+pip install -e ".[test,longbridge,web]" ruff
 pytest -q          # 单元、故障、金标回放，约 25 秒
 ruff check .
 ```
@@ -225,14 +313,18 @@ market_monitor_v3/
   merge.py       联动合并、限流
   engine.py      把以上串起来；补平 K 线、迟到 K 线处理
   render.py      消息文案
-  store.py       SQLite（K 线、判定、事件、发件箱、静音、反馈）
-  outbox.py      Telegram 发件箱：重试、编辑、回复、各种错误处理
-  bot.py         命令和反馈按钮（长轮询）
+  store.py       SQLite（K 线、判定、事件、发件箱（每个渠道一行）、静音、反馈）
+  outbox.py      发件箱：每个渠道一个发送循环，重试、编辑、回复、各种错误处理
+  notifiers/     推送渠道插件：telegram.py、discord.py（REST + Gateway 收按钮和斜杠命令）
+  bot.py         Telegram 命令和反馈按钮（长轮询）；命令逻辑 Discord 共用
+  control.py     本机控制通道（unix socket），网页后台用它让监控重载、静音、发测试消息
+  tradingview.py TradingView webhook 解析、限流、排版
   health.py      断流、积压、卡顿、对时、心跳、看门狗
   reporting.py   日报
   replay.py      回放
   feeds/         binance_spot.py、longbridge.py
   app.py         运行时：各个循环、热加载、优雅退出
   cli.py         monitor 命令
-deploy/          systemd 服务、install.sh、upgrade.sh、mm、配置和密钥示例
+  web/           网页管理后台（FastAPI + Jinja2 服务端渲染，无前端构建步骤）
+deploy/          systemd 服务、install.sh、upgrade.sh、setup-web.sh、Caddy 示例、mm、配置和密钥示例
 ```

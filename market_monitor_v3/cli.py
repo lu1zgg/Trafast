@@ -52,6 +52,10 @@ def cmd_check_config(args: argparse.Namespace) -> int:
         print(f"{a:<6}  {b:<24}  {c:<3}  {d}")
     s = Secrets.from_env()
     print(f"TELEGRAM_BOT_TOKEN：{'已设置' if s.telegram_token else '未设置'}；HEARTBEAT_URL：{'已设置' if s.heartbeat_url else '未设置'}")
+    chans = [n for n, on in (("Telegram", cfg.telegram.enabled), ("Discord", cfg.discord.enabled)) if on]
+    print(f"推送渠道：{'、'.join(chans)}；TradingView 转发：{'开' if cfg.tradingview.enabled else '关'}")
+    if cfg.discord.enabled:
+        print(f"DISCORD_BOT_TOKEN：{'已设置' if s.discord_token else '未设置'}")
     if cfg.stocks.enabled:
         keys = ["LONGBRIDGE_APP_KEY", "LONGBRIDGE_APP_SECRET", "LONGBRIDGE_ACCESS_TOKEN"]
         if cfg.stocks.longbridge.auth == "oauth":
@@ -268,6 +272,100 @@ def cmd_test_telegram(args: argparse.Namespace) -> int:
     return asyncio.run(main())
 
 
+def cmd_test_discord(args: argparse.Namespace) -> int:
+    from .notifiers.discord import DiscordClient, DiscordNotifier
+
+    cfg = _cfg(args)
+    s = Secrets.from_env()
+    if not s.discord_token:
+        print("缺少 DISCORD_BOT_TOKEN", file=sys.stderr)
+        return 1
+    if not cfg.discord.channel_id:
+        print("config.toml 的 [discord] channel_id 还没填", file=sys.stderr)
+        return 1
+
+    async def main() -> int:
+        client = DiscordClient(s.discord_token, cfg.discord.api_base)
+        try:
+            ok, text = await DiscordNotifier(client, cfg.discord.channel_id).check()
+            print("检查：", text)
+            if not ok:
+                return 1
+            res, _ = await client.request(
+                "POST",
+                f"/channels/{cfg.discord.channel_id}/messages",
+                {"content": "✅ V3 测试消息：Discord 配置正常。", "allowed_mentions": {"parse": []}},
+            )
+            print("发送：", "OK" if res.ok else f"{res.kind} {res.description}")
+            return 0 if res.ok else 1
+        finally:
+            await client.aclose()
+
+    return asyncio.run(main())
+
+
+# ---- 网页后台 ----
+WEB_AUTH = "/etc/market-monitor/web-auth.json"
+WEB_HISTORY = "/etc/market-monitor/history"
+WEB_AUDIT = "/var/lib/market-monitor-web/audit.log"
+
+
+def cmd_web(args: argparse.Namespace) -> int:
+    try:
+        from .web.app import run_web
+    except ImportError as e:
+        print(f"缺少网页后台依赖（{e.name}）：pip install '.[web]'", file=sys.stderr)
+        return 1
+    return run_web(args.config, args.secrets, args.auth, args.history, args.audit)
+
+
+def cmd_web_passwd(args: argparse.Namespace) -> int:
+    """创建或重置后台管理员账号：用户名 + 密码 + 两步验证（TOTP）。"""
+    import getpass
+    import re
+
+    try:
+        import pyotp
+
+        from .web.auth import new_totp_secret, save_account, totp_uri
+    except ImportError as e:
+        print(f"缺少网页后台依赖（{e.name}）：pip install '.[web]'", file=sys.stderr)
+        return 1
+
+    username = (args.username or input("用户名（字母、数字、下划线）：")).strip()
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{3,32}", username):
+        print("用户名要 3 到 32 位，只能用字母、数字、下划线、点和横线", file=sys.stderr)
+        return 1
+    pw = getpass.getpass("密码（至少 12 位）：")
+    if len(pw) < 12:
+        print("密码太短，至少 12 位", file=sys.stderr)
+        return 1
+    if getpass.getpass("再输一遍：") != pw:
+        print("两次输入不一致", file=sys.stderr)
+        return 1
+    secret = new_totp_secret()
+    uri = totp_uri(secret, username)
+    print("\n用手机上的验证器（Google Authenticator、Microsoft Authenticator、1Password 等）扫描下面的二维码：\n")
+    try:
+        import segno
+
+        segno.make(uri, error="m").terminal(compact=True)
+    except ImportError:
+        pass
+    print(f"\n扫不了的话，在验证器里手动添加，密钥：{secret}\n")
+    for _ in range(3):
+        code = input("输入验证器上现在显示的 6 位数字：").strip().replace(" ", "")
+        if pyotp.TOTP(secret).verify(code, valid_window=1):
+            break
+        print("不对，再试一次（注意手机时间要准）")
+    else:
+        print("验证失败，账号没有保存", file=sys.stderr)
+        return 1
+    save_account(args.auth, username, pw, secret)
+    print(f"已保存到 {args.auth}。重启后台让旧的登录全部失效：sudo systemctl restart market-monitor-web")
+    return 0
+
+
 def cmd_report(args: argparse.Namespace) -> int:
     from .app import make_calendar
     from .render import to_plain
@@ -413,6 +511,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("target", nargs="?", default="")
     p.add_argument("duration", nargs="?", default=None)
     add("test-telegram", cmd_test_telegram, "发一条测试消息")
+    add("test-discord", cmd_test_discord, "检查 Discord 机器人并发一条测试消息")
+    p = add("web", cmd_web, "运行网页管理后台")
+    p.add_argument("--secrets", default=os.environ.get("MONITOR_SECRETS", "/etc/market-monitor/secrets.env"))
+    p.add_argument("--auth", default=os.environ.get("MONITOR_WEB_AUTH", WEB_AUTH))
+    p.add_argument("--history", default=os.environ.get("MONITOR_WEB_HISTORY", WEB_HISTORY))
+    p.add_argument("--audit", default=os.environ.get("MONITOR_WEB_AUDIT", WEB_AUDIT))
+    p = add("web-passwd", cmd_web_passwd, "创建或重置网页后台管理员（密码 + 两步验证）")
+    p.add_argument("--auth", default=os.environ.get("MONITOR_WEB_AUTH", WEB_AUTH))
+    p.add_argument("--username")
     p = add("report", cmd_report, "打印最近 24 小时日报")
     p.add_argument("--send", action="store_true")
     p = add("lb-check", cmd_lb_check, "接通长桥时的逐项检查")

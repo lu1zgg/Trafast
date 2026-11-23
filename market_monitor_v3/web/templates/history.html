@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% from "_macros.html" import hidden %}
+{% block title %}历史与审计{% endblock %}
+{% block body %}
+<h1>历史与审计</h1>
+
+<div class="card">
+  <h2>配置历史 <span class="muted small">每次保存前自动存档，保留最近 100 份</span></h2>
+  {% if files %}
+  <div class="table-wrap"><table>
+    <tr><th>存档</th><th></th></tr>
+    {% for f in files %}
+    <tr>
+      <td class="mono small"><a href="/history/{{ f }}">{{ f }}</a></td>
+      <td class="actions">
+        <form method="post" action="/history/{{ f }}/restore" data-confirm="把配置恢复到 {{ f }}？当前配置会先存档。">
+          {{ hidden(s) }}<button class="small secondary" type="submit">恢复到这个版本</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table></div>
+  {% else %}<p class="muted">还没有存档。第一次在网页上保存配置时会生成。</p>{% endif %}
+</div>
+
+<div class="card">
+  <h2>操作记录 <span class="muted small">最近 200 条</span></h2>
+  {% if audit %}
+  <div class="table-wrap"><table>
+    <tr><th>时间（北京）</th><th>账号</th><th>来源</th><th>操作</th><th>详情</th></tr>
+    {% for a in audit %}
+    <tr>
+      <td class="small">{{ fmt_ts(a.ts) }}</td>
+      <td>{{ a.who }}</td>
+      <td class="small mono">{{ a.ip }}</td>
+      <td>{% if a.action == 'login-fail' %}<span class="pill bad">登录失败</span>{% else %}{{ actions.get(a.action, a.action) }}{% endif %}</td>
+      <td class="small">{{ a.detail }}</td>
+    </tr>
+    {% endfor %}
+  </table></div>
+  {% else %}<p class="muted">还没有记录。</p>{% endif %}
+</div>
+{% endblock %}

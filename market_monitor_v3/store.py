@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 from .models import Bar, Episode, OutMsg, RootMessage
+from .notifiers import PRIMARY, Route, chan_key
 from .sink import Effects
 
 T = TypeVar("T")
@@ -95,6 +96,14 @@ CREATE TABLE IF NOT EXISTS control (
 );
 """
 
+# 后加的列：旧数据库打开时自动补上
+OUTBOX_EXTRA_COLS = {
+    "channel": "TEXT NOT NULL DEFAULT 'telegram'",
+    "ext_id": "TEXT",
+    "market": "TEXT",
+    "direction": "INTEGER NOT NULL DEFAULT 0",
+}
+
 ALERT_COLS = (
     "ts",
     "symbol",
@@ -145,16 +154,23 @@ def bar_from_row(r: sqlite3.Row) -> Bar:
 
 
 class Store:
-    def __init__(self, path: str | Path):
+    def __init__(self, path: str | Path, routes: dict[str, Route] | None = None):
         self.path = Path(path)
         self.conn: sqlite3.Connection | None = None
         self._exec = ThreadPoolExecutor(max_workers=1, thread_name_prefix="sqlite-writer")
+        # 启用的推送渠道和各自的订阅规则；默认只有 Telegram、收全部消息
+        self.routes: dict[str, Route] = routes if routes is not None else {PRIMARY: Route()}
 
     # ---- 生命周期 ----
     def open_sync(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = connect(self.path)
         self.conn.executescript(SCHEMA)
+        have = {r["name"] for r in self.conn.execute("PRAGMA table_info(outbox)")}
+        for col, decl in OUTBOX_EXTRA_COLS.items():
+            if col not in have:
+                self.conn.execute(f"ALTER TABLE outbox ADD COLUMN {col} {decl}")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS outbox_channel ON outbox (channel, status, next_at)")
         self.conn.commit()
 
     async def open(self) -> None:
@@ -221,23 +237,41 @@ class Store:
         return len(bars)
 
     def _insert_out(self, m: OutMsg) -> None:
-        self.c.execute(
-            "INSERT OR IGNORE INTO outbox (key, kind, parent_key, reply_to_tg, text, level, silent, buttons, "
-            "created_at, expires_at, status, next_at) VALUES (?,?,?,?,?,?,?,?,?,?, 'pending', ?)",
-            (
-                m.key,
-                m.kind,
-                m.parent_key,
-                m.reply_to_tg,
-                m.text,
-                m.level,
-                int(m.silent),
-                json.dumps(m.buttons, ensure_ascii=False) if m.buttons else None,
-                m.created_at,
-                m.expires_at,
-                m.created_at,
-            ),
-        )
+        """一条逻辑消息按渠道各写一行。回复和编辑只写进原消息也在的渠道。"""
+        for ch, route in list(self.routes.items()):
+            if m.channel is not None and m.channel != ch:
+                continue
+            if m.channel is None and m.kind == "cmd":
+                continue  # 命令回复必须指明渠道
+            parent = chan_key(m.parent_key, ch) if m.parent_key else None
+            if m.kind in ("reply", "edit") and parent is not None:
+                # 其他渠道没收原消息（例如只订阅了 L2 以上），回复和编辑也不发；
+                # 主渠道保持原来的处理：编辑丢弃、回复改成独立消息（见 outbox_next）
+                if ch != PRIMARY and self.c.execute("SELECT 1 FROM outbox WHERE key=?", (parent,)).fetchone() is None:
+                    continue
+            elif not route.accepts(m.kind, m.key, m.level, m.market):
+                continue
+            self.c.execute(
+                "INSERT OR IGNORE INTO outbox (key, kind, parent_key, reply_to_tg, text, level, silent, buttons, "
+                "created_at, expires_at, status, next_at, channel, market, direction) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?, 'pending', ?,?,?,?)",
+                (
+                    chan_key(m.key, ch),
+                    m.kind,
+                    parent,
+                    m.reply_to_tg,
+                    m.text,
+                    m.level,
+                    int(m.silent),
+                    json.dumps(m.buttons, ensure_ascii=False) if m.buttons else None,
+                    m.created_at,
+                    m.expires_at,
+                    m.created_at,
+                    ch,
+                    m.market,
+                    m.direction,
+                ),
+            )
 
     def enqueue(self, m: OutMsg) -> None:
         with self.c:
@@ -259,11 +293,12 @@ class Store:
             )
 
     # ---- 发件箱 ----
-    def outbox_next(self, now: float) -> dict[str, Any] | None:
-        """取下一条可以发送的消息。回复和编辑要等原消息先发出。"""
+    def outbox_next(self, now: float, channel: str = PRIMARY) -> dict[str, Any] | None:
+        """取某个渠道下一条可以发送的消息。回复和编辑要等原消息先发出。"""
         c = self.c
         rows = c.execute(
-            "SELECT * FROM outbox WHERE status='pending' AND next_at<=? ORDER BY id LIMIT 50", (now,)
+            "SELECT * FROM outbox WHERE channel=? AND status='pending' AND next_at<=? ORDER BY id LIMIT 50",
+            (channel, now),
         ).fetchall()
         for r in rows:
             row = dict(r)
@@ -279,14 +314,16 @@ class Store:
                     self.outbox_mark(row["id"], "superseded")
                     continue
             row["target_tg"] = None
+            row["target_ext"] = None
             if row["kind"] in ("reply", "edit") and row["parent_key"]:
                 p = c.execute(
-                    "SELECT status, tg_message_id FROM outbox WHERE key=?", (row["parent_key"],)
+                    "SELECT status, tg_message_id, ext_id FROM outbox WHERE key=?", (row["parent_key"],)
                 ).fetchone()
                 if p is not None and p["status"] == "pending":
                     continue  # 原消息还没发出，先等
-                if p is not None and p["status"] == "sent" and p["tg_message_id"]:
+                if p is not None and p["status"] == "sent" and (p["tg_message_id"] or p["ext_id"]):
                     row["target_tg"] = p["tg_message_id"]
+                    row["target_ext"] = p["ext_id"] or (str(p["tg_message_id"]) if p["tg_message_id"] else None)
                 elif row["kind"] == "edit":
                     self.outbox_mark(row["id"], "dropped", error="原消息未发出，放弃编辑")
                     continue
@@ -303,6 +340,7 @@ class Store:
         *,
         error: str | None = None,
         tg_message_id: int | None = None,
+        ext_id: str | None = None,
         next_at: float | None = None,
         attempts_inc: int = 0,
         text: str | None = None,
@@ -317,6 +355,9 @@ class Store:
         if tg_message_id is not None:
             sets.append("tg_message_id=?")
             vals.append(tg_message_id)
+        if ext_id is not None:
+            sets.append("ext_id=?")
+            vals.append(ext_id)
         if status == "sent":
             sets.append("sent_at=?")
             vals.append(time.time())

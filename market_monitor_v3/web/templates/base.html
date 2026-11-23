@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>{% block title %}管理后台{% endblock %} · Trafast</title>
+<link rel="stylesheet" href="/static/style.css">
+<script src="/static/app.js" defer></script>
+</head>
+<body>
+{% if s %}
+<header class="top">
+  <div class="brand">Trafast<span class="ver">v{{ version }}</span></div>
+  <nav>
+    {% for href, label in nav %}
+    <a href="{{ href }}" class="{{ 'on' if path == href or (href != '/' and path.startswith(href)) else '' }}">{{ label }}</a>
+    {% endfor %}
+  </nav>
+  <form method="post" action="/logout" class="logout">
+    <input type="hidden" name="csrf" value="{{ s.csrf }}">
+    <button class="link" type="submit">退出（{{ s.username }}）</button>
+  </form>
+</header>
+{% endif %}
+<main>
+  {% for kind, text in msgs %}<div class="flash {{ kind }}">{{ text }}</div>{% endfor %}
+  {% block body %}{% endblock %}
+</main>
+</body>
+</html>

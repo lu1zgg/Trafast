@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import asyncio
 import fcntl
+import html
 import logging
+import math
 import os
 import signal
 import time
@@ -14,11 +16,13 @@ from zoneinfo import ZoneInfo
 
 from . import __version__
 from .baseline import Baselines, BaselineStat, compute_symbol_baseline
-from .bot import BotPoller
-from .config import SESSION_LABELS, AppConfig, Params, Secrets, load_config
+from .bot import BotPoller, _log_control
+from .config import SESSION_LABELS, AppConfig, Params, Secrets, channel_routes, load_config
+from .control import ControlServer
 from .engine import Engine
 from .health import Health, sd_notify
 from .models import Bar, OutMsg, display_name, market_of
+from .notifiers.discord import DiscordClient, DiscordGateway, DiscordNotifier
 from .outbox import ChatRef, OutboxSender
 from .render import arrow, pct
 from .reporting import build_daily_report
@@ -26,6 +30,8 @@ from .sessions import ET, UsCalendar, crypto_instance, crypto_session
 from .sink import BufferSink
 from .store import Store, bar_from_row, connect
 from .telegram import TelegramClient
+from .tradingview import Throttle
+from .tradingview import card_text as tv_card_text
 
 log = logging.getLogger("market_monitor_v3")
 BJ = ZoneInfo("Asia/Shanghai")
@@ -125,7 +131,7 @@ class Runtime:
         self.secrets = secrets
         self.clock = clock
         self.stop = asyncio.Event()
-        self.store = Store(cfg.db_path)
+        self.store = Store(cfg.db_path, routes=channel_routes(cfg))
         self.cal = make_calendar(cfg)
         self.params = Params(cfg)
         self.baselines = Baselines()
@@ -137,7 +143,14 @@ class Runtime:
         self.dropped_bars = 0
         self.health: Health | None = None
         self.engine: Engine | None = None
-        self.sender: OutboxSender | None = None
+        self.senders: dict[str, OutboxSender] = {}
+        self.channel_ok: dict[str, bool] = {}
+        self.tg: TelegramClient | None = None
+        self.tg_poll: TelegramClient | None = None
+        self.discord_gw: DiscordGateway | None = None
+        self.control: ControlServer | None = None
+        self.tv_throttle = Throttle(cfg.tradingview.max_per_min, cfg.tradingview.dedup_s)
+        self.exit_code = 0
         self.binance: Any = None
         self.lb: Any = None
         self.tasks: list[asyncio.Task[Any]] = []
@@ -145,17 +158,45 @@ class Runtime:
     # ---- 启动 ----
     async def start(self) -> None:
         cfg = self.cfg
-        if not self.secrets.telegram_token:
-            raise SystemExit("缺少环境变量 TELEGRAM_BOT_TOKEN（写在 /etc/market-monitor/secrets.env）")
+        if cfg.telegram.enabled and not self.secrets.telegram_token:
+            raise SystemExit("缺少环境变量 TELEGRAM_BOT_TOKEN（写在 /etc/market-monitor/secrets.env，或在后台“推送渠道”里填）")
+        if cfg.discord.enabled and not self.secrets.discord_token:
+            raise SystemExit("缺少环境变量 DISCORD_BOT_TOKEN（写在 /etc/market-monitor/secrets.env，或在后台“推送渠道”里填）")
         await self.store.open()
         override = await self.store.call(Store.kv_get, "chat_id_override")
         if override:
             self.chat.chat_id = int(override)
         await self.store.call(Store.log_event, "start", f"{__version__} {self.params.rule_version}", self.clock())
 
-        self.tg = TelegramClient(self.secrets.telegram_token, cfg.telegram.api_base, cfg.telegram.send_timeout_s)
-        self.tg_poll = TelegramClient(self.secrets.telegram_token, cfg.telegram.api_base, 40.0)
-        self.sender = OutboxSender(self.store, self.tg, self.chat, self.clock, on_auth_change=self._on_tg_auth)
+        if cfg.telegram.enabled:
+            assert self.secrets.telegram_token
+            self.tg = TelegramClient(self.secrets.telegram_token, cfg.telegram.api_base, cfg.telegram.send_timeout_s)
+            self.tg_poll = TelegramClient(self.secrets.telegram_token, cfg.telegram.api_base, 40.0)
+            self.senders["telegram"] = OutboxSender(
+                self.store, self.tg, self.chat, self.clock, on_auth_change=lambda ok: self._on_auth("telegram", ok)
+            )
+        if cfg.discord.enabled:
+            assert self.secrets.discord_token
+            dc = DiscordClient(self.secrets.discord_token, cfg.discord.api_base, cfg.discord.send_timeout_s)
+            self.senders["discord"] = OutboxSender(
+                self.store,
+                clock=self.clock,
+                on_auth_change=lambda ok: self._on_auth("discord", ok),
+                notifier=DiscordNotifier(dc, cfg.discord.channel_id),
+            )
+            if cfg.discord.commands or cfg.discord.feedback_buttons:
+                self.discord_gw = DiscordGateway(
+                    self.secrets.discord_token,
+                    DiscordClient(self.secrets.discord_token, cfg.discord.api_base, cfg.discord.send_timeout_s),
+                    cfg.discord.channel_id,
+                    on_command=self._discord_command,
+                    on_feedback=self._feedback,
+                    ops=self._ops,
+                    commands_enabled=cfg.discord.commands,
+                    feedback_enabled=cfg.discord.feedback_buttons,
+                    clock=self.clock,
+                )
+        self.channel_ok = {ch: True for ch in self.senders}
 
         server_time = None
         if cfg.crypto.enabled:
@@ -166,7 +207,7 @@ class Runtime:
             )
             server_time = self.binance.server_time
         self.health = Health(
-            cfg, self.cal, self.store, self.sender.notify, self.clock, self.secrets.heartbeat_url, server_time
+            cfg, self.cal, self.store, self.notify_senders, self.clock, self.secrets.heartbeat_url, server_time
         )
         if self.binance is not None:
             self.health.register("binance", "CRYPTO")
@@ -248,13 +289,33 @@ class Runtime:
         if eff.empty():
             return
         await self.store.call(Store.apply_effects, eff)
-        if eff.outs and self.sender is not None:
-            self.sender.notify()
+        if eff.outs:
+            self.notify_senders()
 
-    async def _on_tg_auth(self, ok: bool) -> None:
+    def notify_senders(self) -> None:
+        for s in self.senders.values():
+            s.notify()
+
+    async def _on_auth(self, channel: str, ok: bool) -> None:
+        self.channel_ok[channel] = ok
         if self.health is not None:
-            self.health.telegram_ok = ok
+            # 至少有一个渠道还能发，用户就还能收到告警和运维消息；全部暂停才让外部心跳报警
+            self.health.telegram_ok = any(self.channel_ok.values())
             self.health._last_heartbeat = 0.0  # 立刻把状态报给外部心跳
+
+    async def _ops(self, key: str, text: str) -> None:
+        if self.health is not None:
+            await self.health.ops(key, text)
+
+    async def _feedback(self, root_key: str, user_id: int, value: int) -> None:
+        await self.store.call(Store.feedback_set, root_key, user_id, value)
+
+    async def _discord_command(self, cmd: str, args: list[str], user_id: int | None, who: str) -> str | None:
+        from .bot import run_command
+
+        reply = await run_command(self, cmd, args, user_id, f"discord:{who}", set(self.cfg.discord.admin_user_ids), self.clock)
+        await self.store.call(_log_control, self.clock(), f"discord:{who}", "/" + " ".join([cmd, *args]), (reply or "")[:200])
+        return reply
 
     # ---- 协程 ----
     async def core_loop(self) -> None:
@@ -373,8 +434,7 @@ class Runtime:
             Store.enqueue,
             OutMsg(key=f"report:{day}", kind="ops", text=text, created_at=now, expires_at=now + 6 * 3600, silent=True),
         )
-        if self.sender is not None:
-            self.sender.notify()
+        self.notify_senders()
 
     async def report_text(self, now: float | None = None) -> str:
         now = now or self.clock()
@@ -407,8 +467,10 @@ class Runtime:
             lines.append("进行中：无")
         lines.append(self.mutes_text())
         n, age = await self.store.call(Store.outbox_backlog, now)
-        tg = "正常" if self.health.telegram_ok else "暂停（发送被拒）"
-        lines.append(f"Telegram：{tg}｜待发 {n} 条")
+        chans = "，".join(
+            f"{s.notifier.label} {'正常' if not s.paused else '暂停（发送被拒）'}" for s in self.senders.values()
+        )
+        lines.append(f"推送：{chans}｜待发 {n} 条")
         not_ready = [display_name(s) for s in self.cfg.all_symbols() if not self.baselines.ready_sessions(s)]
         if not_ready:
             lines.append("基线未就绪（只用直通线）：" + "、".join(not_ready))
@@ -458,52 +520,182 @@ class Runtime:
         return n
 
     # ---- 热加载 ----
-    async def reload(self) -> None:
+    @staticmethod
+    def restart_reasons(old: AppConfig, new: AppConfig) -> list[str]:
+        """这些变化要重启进程才生效（重启由 systemd 自动拉起，十几秒）。"""
+        out = []
+        if new.all_symbols() != old.all_symbols() or new.stocks.enabled != old.stocks.enabled or new.crypto.enabled != old.crypto.enabled:
+            out.append("标的或市场开关")
+        if new.telegram.model_dump(exclude={"route", "admin_user_ids"}) != old.telegram.model_dump(exclude={"route", "admin_user_ids"}):
+            out.append("Telegram 设置")
+        if new.discord.model_dump(exclude={"route", "admin_user_ids"}) != old.discord.model_dump(exclude={"route", "admin_user_ids"}):
+            out.append("Discord 设置")
+        if new.stocks.longbridge != old.stocks.longbridge or new.crypto.model_dump(exclude={"multipliers"}) != old.crypto.model_dump(exclude={"multipliers"}):
+            out.append("数据源设置")
+        if new.general != old.general or new.storage != old.storage or new.calendar != old.calendar:
+            out.append("系统设置")
+        return out
+
+    async def reload(self, auto_restart: bool = False) -> dict[str, Any]:
         assert self.engine is not None and self.health is not None
         if not self.config_path:
-            return
+            return {"ok": False, "error": "没有配置文件路径"}
         old = self.params.rule_version
         try:
             new = load_config(self.config_path)
         except Exception as e:  # noqa: BLE001
             await self.health.ops(f"reload-bad:{int(self.clock())}", f"新配置无效，继续使用旧配置：{str(e)[:300]}")
-            return
-        restart_needed = (
-            new.all_symbols() != self.cfg.all_symbols()
-            or str(new.telegram.chat_id) != str(self.cfg.telegram.chat_id)
-            or new.stocks.enabled != self.cfg.stocks.enabled
-            or new.crypto.enabled != self.cfg.crypto.enabled
-        )
+            return {"ok": False, "error": str(e)[:500]}
+        reasons = self.restart_reasons(self.cfg, new)
         self.cfg = new
         self.params = Params(new)
         self.engine.cfg = new
         self.engine.set_params(self.params)
-        self.engine.merger.buttons = new.telegram.feedback_buttons
+        self.engine.merger.buttons = new.telegram.feedback_buttons or new.discord.feedback_buttons
         self.health.cfg = new
         self.health.hc = new.health
+        # 订阅规则（每个渠道收哪些消息）可以直接换
+        routes = channel_routes(new)
+        if set(routes) == set(self.store.routes):
+            self.store.routes = routes
+        self.tv_throttle.max_per_min = new.tradingview.max_per_min
+        self.tv_throttle.dedup_s = new.tradingview.dedup_s
         msg = f"配置已重载：{old} → {self.params.rule_version}"
-        if restart_needed:
-            msg += "。标的、群组或市场开关的变化要重启才生效：systemctl restart market-monitor"
+        if reasons and auto_restart:
+            msg += f"。{'、'.join(reasons)}有变化，监控马上自动重启"
+        elif reasons:
+            msg += f"。{'、'.join(reasons)}的变化要重启才生效：systemctl restart market-monitor"
         await self.health.ops(f"reload:{int(self.clock())}", msg)
+        if reasons and auto_restart:
+            self.request_restart()
+        return {"ok": True, "rule_version": self.params.rule_version, "restart": bool(reasons and auto_restart), "restart_reasons": reasons}
+
+    def request_restart(self, delay: float = 1.0) -> None:
+        """正常退出，由 systemd（Restart=always）拉起新进程。"""
+        log.warning("按请求重启")
+        self.exit_code = 0
+        asyncio.get_running_loop().call_later(delay, self.stop.set)
+
+    # ---- 控制通道 ----
+    async def control_handle(self, req: dict[str, Any]) -> dict[str, Any]:
+        cmd = req.get("cmd")
+        if cmd == "ping":
+            return {"ok": True, "version": __version__, "rule_version": self.params.rule_version}
+        if cmd == "status":
+            return {"ok": True, **(await self.status_json())}
+        if cmd == "reload":
+            return await self.reload(auto_restart=bool(req.get("auto_restart", True)))
+        if cmd == "restart":
+            await self.store.call(_log_control, self.clock(), "web", "restart", "ok")
+            self.request_restart()
+            return {"ok": True}
+        if cmd == "mute":
+            target = "*" if req.get("target") in ("*", "all") else self.resolve_symbol(str(req.get("target") or ""))
+            if target is None:
+                return {"ok": False, "error": "没找到标的"}
+            until = self.clock() + max(60, min(7 * 86400, int(req.get("seconds") or 3600)))
+            await self.mute(target, until, "web")
+            return {"ok": True, "target": target, "until": until}
+        if cmd == "unmute":
+            t = req.get("target")
+            n = await self.unmute(None if t in (None, "*", "all") else self.resolve_symbol(str(t)) or str(t))
+            return {"ok": True, "cleared": n}
+        if cmd == "test":
+            ch = str(req.get("channel") or "")
+            if ch not in self.senders:
+                return {"ok": False, "error": f"渠道 {ch} 没有启用"}
+            now = self.clock()
+            text = req.get("text") or f"✅ 测试消息：{self.senders[ch].notifier.label} 推送正常（{datetime.fromtimestamp(now, BJ).strftime('%m-%d %H:%M:%S')}）"
+            await self.store.call(
+                Store.enqueue,
+                OutMsg(key=f"test:{ch}:{int(now * 1000)}", kind="cmd", text=str(text)[:3500], created_at=now, expires_at=now + 300, channel=ch, direction=int(req.get("direction") or 0)),
+            )
+            self.notify_senders()
+            return {"ok": True}
+        if cmd == "tv_alert":
+            return await self.tradingview_alert(req.get("alert") or {})
+        if cmd == "ops":
+            # 网页后台的安全提醒（登录、锁定）：发到运维消息
+            assert self.health is not None
+            text = str(req.get("text") or "")[:500]
+            if text:
+                await self.health.ops(f"web:{int(self.clock() * 1000)}", "🔐 后台：" + html.escape(text))
+            return {"ok": True}
+        return {"ok": False, "error": f"未知命令 {cmd}"}
+
+    async def tradingview_alert(self, alert: dict[str, Any]) -> dict[str, Any]:
+        if not self.cfg.tradingview.enabled:
+            return {"ok": False, "error": "TradingView 转发没有启用"}
+        now = self.clock()
+        allowed, info = self.tv_throttle.allow(alert, now)
+        if not allowed:
+            log.info("TradingView 告警未转发：%s", info)
+            return {"ok": False, "error": info}
+        text, direction = tv_card_text(alert, now)
+        await self.store.call(
+            Store.enqueue,
+            OutMsg(key=f"tv:{int(now)}:{info}", kind="send", text=text, created_at=now, expires_at=now + 600, level="L2", market="TV", direction=direction),
+        )
+        await self.store.call(Store.log_event, "tradingview", f"{alert.get('ticker') or ''} {alert.get('action') or ''}".strip(), now)
+        self.notify_senders()
+        return {"ok": True}
+
+    async def status_json(self) -> dict[str, Any]:
+        assert self.engine is not None and self.health is not None
+        now = self.clock()
+        feeds = {}
+        if self.cfg.stocks.enabled:
+            feeds["longbridge"] = self.health.age("longbridge", now)
+        if self.cfg.crypto.enabled:
+            feeds["binance"] = self.health.age("binance", now)
+        n, age = await self.store.call(Store.outbox_backlog, now)
+        return {
+            "version": __version__,
+            "rule_version": self.params.rule_version,
+            "preset": self.params.label,
+            "uptime_s": int(now - self.started_at),
+            "us_session": SESSION_LABELS[self.cal.session_at(now)] if self.cfg.stocks.enabled else None,
+            "feeds": feeds,
+            "channels": {
+                ch: {"label": s.notifier.label, "paused": s.paused, "reason": s.paused_reason, "last_ok_at": s.last_ok_at}
+                for ch, s in self.senders.items()
+            },
+            "discord_gateway": None if self.discord_gw is None else self.discord_gw.connected,
+            "backlog": n,
+            "backlog_age_s": age,
+            "episodes": [
+                {
+                    "symbol": display_name(ep.symbol),
+                    "direction": ep.direction,
+                    "move": (math.exp(ep.direction * ep.extreme) - 1) * 100,
+                    "minutes": max(1, round((now - ep.anchor_close_ts) / 60)),
+                    "level": ep.level,
+                }
+                for ep in self.engine.episodes.active()
+            ],
+            "mutes": {k: v for k, v in self.engine.mutes.items() if v > now},
+            "baseline_not_ready": [display_name(s) for s in self.cfg.all_symbols() if not self.baselines.ready_sessions(s)],
+            "recent": await self.store.call(_recent_alerts, now - 3 * 86400),
+        }
 
     # ---- 运行 ----
     async def run(self) -> None:
         await self.start()
-        assert self.sender is not None and self.health is not None
+        assert self.health is not None
         loop = asyncio.get_running_loop()
         loop.add_signal_handler(signal.SIGTERM, self.stop.set)
         loop.add_signal_handler(signal.SIGINT, self.stop.set)
         loop.add_signal_handler(signal.SIGHUP, lambda: asyncio.ensure_future(self.reload()))
 
         bot = None
-        if self.cfg.telegram.commands:
+        if self.cfg.telegram.enabled and self.cfg.telegram.commands and self.tg_poll is not None:
             bot = BotPoller(
                 self.store,
                 self.tg_poll,
                 self.chat,
                 self,
                 self.cfg.telegram.admin_user_ids,
-                self.sender.notify,
+                self.notify_senders,
                 self.clock,
                 self.cfg.telegram.feedback_buttons,
             )
@@ -511,11 +703,19 @@ class Runtime:
             self.core_loop(),
             self.clock_loop(),
             self.scheduler_loop(),
-            self.sender.run(self.stop),
             self.health.run(self.stop),
         ]
+        coros += [s.run(self.stop) for s in self.senders.values()]
         if bot is not None:
             coros.append(bot.run(self.stop))
+        if self.discord_gw is not None:
+            coros.append(self.discord_gw.run(self.stop))
+        self.control = ControlServer(self.cfg.general.control_socket, self.control_handle)
+        try:
+            await self.control.start()
+        except OSError as e:
+            log.warning("控制通道打不开（%s），网页后台将无法连接", e)
+            self.control = None
         if self.binance is not None:
             coros.append(self.binance.run(self.stop))
         if self.lb is not None:
@@ -550,6 +750,8 @@ class Runtime:
             if n == 0 or (self.health is not None and not self.health.telegram_ok):
                 break
             await asyncio.sleep(0.5)
+        if self.control is not None:
+            await self.control.close()
         for t in self.tasks:
             t.cancel()
         await asyncio.gather(*self.tasks, return_exceptions=True)
@@ -557,10 +759,36 @@ class Runtime:
             await self.flush()
         except Exception:  # noqa: BLE001
             log.exception("停止时写库失败")
-        await self.tg.aclose()
-        await self.tg_poll.aclose()
+        for s in self.senders.values():
+            await s.notifier.aclose()
+        if self.tg_poll is not None:
+            await self.tg_poll.aclose()
+        if self.discord_gw is not None:
+            await self.discord_gw.client.aclose()
         await self.store.close()
         log.info("已停止")
+
+
+def _recent_alerts(store: Store, since: float) -> list[dict[str, Any]]:
+    rows = store.c.execute(
+        "SELECT a.ts, a.symbol, a.session, a.level, a.k, a.d, a.episode_id FROM alerts a "
+        "WHERE a.outcome='pushed' AND a.ts>=? ORDER BY a.ts DESC LIMIT 30",
+        (int(since),),
+    ).fetchall()
+    out = []
+    for r in rows:
+        d = r["d"] or 0.0
+        out.append(
+            {
+                "ts": r["ts"],
+                "symbol": display_name(r["symbol"]),
+                "session": SESSION_LABELS.get(r["session"] or "", r["session"]),
+                "level": r["level"],
+                "k": r["k"],
+                "move": (math.exp(d) - 1) * 100,
+            }
+        )
+    return out
 
 
 def run_service(config_path: str) -> int:
@@ -577,7 +805,7 @@ def run_service(config_path: str) -> int:
         asyncio.run(rt.run())
     finally:
         lock.release()
-    return 0
+    return rt.exit_code
 
 
 __all__ = ["Runtime", "run_service", "next_at", "make_calendar", "compute_baselines_sync"]

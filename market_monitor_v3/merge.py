@@ -41,6 +41,10 @@ class Group:
     flushed_at: float = 0.0
 
 
+def _card(m: OpenAlert) -> dict:
+    return render.card_from(m.cand, m.level, m.retained, m.price, m.close_ts, ep_id=m.ep.id)
+
+
 def _lead(members: list[OpenAlert]) -> OpenAlert:
     return max(members, key=lambda m: (LEVEL_RANK[m.level], m.cand.score))
 
@@ -96,7 +100,11 @@ class Merger:
         root = self.roots.get(ep.root_key or "")
         if root is None:
             return
-        root.end_lines.append(render.end_line(ep, with_name=len(root.symbols) > 1))
+        card = next((c for c in root.cards if c.get("ep") == ep.id), None)
+        if card is not None:
+            card["end"] = render.end_info(ep)
+        else:
+            root.end_lines.append(render.end_line(ep, with_name=len(root.symbols) > 1))
         self._emit_edit(root, now)
 
     def gc(self, active_root_keys: set[str]) -> None:
@@ -125,10 +133,10 @@ class Merger:
             key=g.key,
             market=g.market,
             direction=g.direction,
-            lead_html=render.lead_block(lead.cand, lead.level, lead.retained, lead.price, lead.close_ts),
+            lead_html="",
             symbols=[m.cand.symbol for m in g.members],
-            members=[render.member_item(m.cand) for m in others],
             buttons=render.feedback_buttons(g.key) if self.buttons else None,
+            cards=[_card(m) for m in [lead, *others]],
         )
         g.lead, g.flushed, g.flushed_at = lead, True, now
         self.roots[g.key] = root
@@ -145,6 +153,8 @@ class Merger:
                 expires_at=self._expires(g.members),
                 level=lead.level,
                 buttons=root.buttons,
+                market=g.market,
+                direction=g.direction,
             )
         )
         self.sent.append(now)
@@ -158,14 +168,8 @@ class Merger:
         for g in groups:
             lead = _lead(g.members)
             c = lead.cand
-            line = (
-                f"{render.arrow(c.direction)} <b>{render.esc(display_name(c.symbol))}</b> {render.pct(c.primary.d)}"
-                f"｜{c.primary.k} 分钟｜{lead.level}"
-            )
             others = [render.member_item(m.cand) for m in g.members if m is not lead]
-            if others:
-                line += "，同时 " + "、".join(others)
-            lines.append(line)
+            lines.append(render.summary_line(c, lead.level, lead.price, others))
             all_members.extend(g.members)
             if LEVEL_RANK[lead.level] > LEVEL_RANK[top]:
                 top = lead.level
@@ -195,6 +199,7 @@ class Merger:
                 expires_at=self._expires(all_members),
                 level=top,
                 buttons=root.buttons,
+                market=root.market,
             )
         )
         self.sent.append(now)
@@ -206,7 +211,10 @@ class Merger:
         if root is None:
             return
         root.symbols.append(oa.cand.symbol)
-        root.members.append(render.member_item(oa.cand))
+        if root.cards:
+            root.cards.append(_card(oa))
+        else:
+            root.members.append(render.member_item(oa.cand))
         if g.lead is not None and oa.level == "L3" and LEVEL_RANK["L3"] > LEVEL_RANK[g.lead.level]:
             self.sink.out(
                 OutMsg(
@@ -217,6 +225,8 @@ class Merger:
                     created_at=now,
                     expires_at=oa.close_ts + self.params.merge.expiry_s,
                     level="L3",
+                    market=oa.cand.market,
+                    direction=oa.cand.direction,
                 )
             )
         self._emit_edit(root, now)
@@ -235,5 +245,7 @@ class Merger:
                 expires_at=now + 1800,
                 buttons=root.buttons,
                 silent=True,
+                market=root.market,
+                direction=root.direction,
             )
         )

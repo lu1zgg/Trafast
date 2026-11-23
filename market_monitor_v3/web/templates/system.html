@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% from "_macros.html" import hidden, check, num, text, secret %}
+{% block title %}系统{% endblock %}
+{% block body %}
+<h1>系统设置</h1>
+
+<form method="post" action="/system">
+{{ hidden(s, rev) }}
+<div class="card">
+  <h2>日报与提醒</h2>
+  <div class="fields">
+    {{ text("daily_report_time", cfg.health.daily_report_time, "日报发送时间", "24 小时制", "09:05", True) }}
+    {{ text("report_tz", cfg.health.report_tz, "日报时区", "IANA 时区名，如 Asia/Shanghai、America/New_York", "Asia/Shanghai", True) }}
+    <div class="field">
+      <label for="f-lbexp">长桥 token 到期日</label>
+      <input type="date" id="f-lbexp" name="longbridge_token_expires" value="{{ cfg.health.longbridge_token_expires or '' }}">
+      <div class="hint">填了以后，到期前 {{ cfg.health.token_warn_days }} 天开始每天提醒</div>
+    </div>
+  </div>
+  {{ check("startup_message", cfg.health.startup_message, "启动时发一条“监控已启动”") }}
+</div>
+
+<div class="card">
+  <h2>数据断流提醒</h2>
+  <div class="fields">
+    {{ num("binance_stale_s", cfg.health.binance_stale_s, "Binance 多久没数据算断流（秒）", None, 1, 5) }}
+    {{ num("lb_stale_reg_s", cfg.health.lb_stale_reg_s, "长桥盘中多久没数据算断流（秒）", None, 1, 10) }}
+    {{ num("lb_stale_other_s", cfg.health.lb_stale_other_s, "长桥盘前盘后夜盘（秒）", "这些时段成交稀，放宽一些", 1, 10) }}
+    {{ num("stale_alert_after_s", cfg.health.stale_alert_after_s, "断流持续多久才提醒（秒）", "避免短暂抖动也报", 1, 0) }}
+  </div>
+</div>
+
+<div class="card">
+  <h2>数据与日志</h2>
+  <div class="fields">
+    <div class="field">
+      <label for="f-lb_auth">长桥接入方式</label>
+      <select id="f-lb_auth" name="lb_auth">
+        <option value="apikey"{% if cfg.stocks.longbridge.auth == 'apikey' %} selected{% endif %}>API Key（App Key + Secret + Access Token）</option>
+        <option value="oauth"{% if cfg.stocks.longbridge.auth == 'oauth' %} selected{% endif %}>OAuth（浏览器授权）</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="f-log_level">日志级别</label>
+      <select id="f-log_level" name="log_level">
+        {% for lv in ["DEBUG", "INFO", "WARNING", "ERROR"] %}<option{% if cfg.general.log_level == lv %} selected{% endif %}>{{ lv }}</option>{% endfor %}
+      </select>
+    </div>
+    {{ num("bars_days", cfg.storage.bars_days, "K 线保留（天）", None, 1, 30) }}
+    {{ num("outbox_days", cfg.storage.outbox_days, "已发消息记录保留（天）", None, 1, 1) }}
+    {{ num("backup_keep", cfg.storage.backup_keep, "数据库备份保留份数", None, 1, 1) }}
+  </div>
+</div>
+<div class="buttons"><button type="submit">保存系统设置</button></div>
+</form>
+
+<div class="card">
+  <h2>数据源密钥与心跳</h2>
+  <p class="small muted">这些值存放在服务器的 <code>secrets.env</code>，网页上只显示是否已设置，永远不显示原文。留空表示不改。保存后监控会重启。</p>
+  <form method="post" action="/system/secrets">
+    {{ hidden(s) }}
+    <div class="fields">
+      {{ secret("LONGBRIDGE_APP_KEY", secrets_masked.LONGBRIDGE_APP_KEY, "长桥 App Key") }}
+      {{ secret("LONGBRIDGE_APP_SECRET", secrets_masked.LONGBRIDGE_APP_SECRET, "长桥 App Secret") }}
+      {{ secret("LONGBRIDGE_ACCESS_TOKEN", secrets_masked.LONGBRIDGE_ACCESS_TOKEN, "长桥 Access Token") }}
+      {{ secret("LONGBRIDGE_OAUTH_CLIENT_ID", secrets_masked.LONGBRIDGE_OAUTH_CLIENT_ID, "长桥 OAuth Client ID", "只有选 OAuth 接入时需要") }}
+      {{ secret("HEARTBEAT_URL", secrets_masked.HEARTBEAT_URL, "心跳地址（可选）", "例如 Healthchecks.io 的 ping 地址，监控每分钟访问一次，停了它会通知你") }}
+    </div>
+    <div class="buttons"><button type="submit">保存密钥</button></div>
+  </form>
+</div>
+
+<div class="card">
+  <h2>维护</h2>
+  <form method="post" action="/system/restart" data-confirm="确定重启监控？大约 15 秒后恢复。">
+    {{ hidden(s) }}
+    <div class="buttons"><button class="danger" type="submit">重启监控</button>
+      <span class="small muted">后台登录账号（密码、验证器）只能在服务器上用 <code>sudo mm web-passwd</code> 修改。</span></div>
+  </form>
+</div>
+{% endblock %}

@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% from "_macros.html" import hidden, check %}
+{% block title %}标的{% endblock %}
+{% block body %}
+<h1>监控标的</h1>
+
+<div class="card">
+  <h2>添加标的</h2>
+  <form method="post" action="/symbols/add" class="row">
+    {{ hidden(s, rev) }}
+    <div class="field">
+      <label for="add-market">市场</label>
+      <select id="add-market" name="market">
+        <option value="US">美股（长桥）</option>
+        <option value="CRYPTO">加密货币现货（Binance）</option>
+      </select>
+    </div>
+    <div class="field grow">
+      <label for="add-symbol">代码</label>
+      <input type="text" id="add-symbol" name="symbol" placeholder="美股填 TSLA，加密填 BTC 或 BTCUSDT" required autocomplete="off" autocapitalize="characters" spellcheck="false">
+    </div>
+    <button type="submit">添加</button>
+  </form>
+  <p class="small muted">美股自动补 <code>.US</code>，加密货币不写计价币时默认 USDT，并会先到 Binance 核对交易对是否存在。
+    新标的需要先积累几天历史数据作为基线，期间不会报警。添加或删除后监控会自动重启（约 15 秒）。</p>
+</div>
+
+{# 系数输入框通过 form="settings" 归属到底部的设置表单，删除按钮各自是独立的小表单 #}
+{% for market, title, mc in [("stocks", "美股", cfg.stocks), ("crypto", "加密货币", cfg.crypto)] %}
+<div class="card">
+  <div class="card-head">
+    <h2>{{ title }} <span class="muted small">{{ mc.symbols|length }} 个</span></h2>
+    {% if not mc.enabled %}<span class="pill warn">整个市场已关闭</span>{% endif %}
+  </div>
+  {% if mc.symbols %}
+  <div class="table-wrap"><table>
+    <tr><th>代码</th><th>敏感度系数</th><th></th></tr>
+    {% for sym in mc.symbols %}
+    <tr>
+      <td><b>{{ name(sym) }}</b> <span class="muted small mono">{{ sym }}</span></td>
+      <td><input class="narrow" type="number" step="0.05" min="0.2" max="5" name="mult_{{ sym }}" form="settings" value="{{ mc.multipliers.get(sym, 1.0) }}" aria-label="{{ sym }} 系数"></td>
+      <td class="actions">
+        <form method="post" action="/symbols/remove" data-confirm="确定不再监控 {{ name(sym) }}？">
+          {{ hidden(s, rev) }}<input type="hidden" name="symbol" value="{{ sym }}">
+          <button class="small danger" type="submit">删除</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table></div>
+  {% else %}<p class="muted">还没有标的。</p>{% endif %}
+</div>
+{% endfor %}
+
+<div class="card">
+  <h2>市场开关与系数</h2>
+  <form method="post" action="/symbols/settings" id="settings">
+    {{ hidden(s, rev) }}
+    {{ check("stocks_enabled", cfg.stocks.enabled, "监控美股", "关掉后不连长桥") }}
+    {{ check("overnight", cfg.stocks.overnight, "美股夜盘也监控", "北京时间白天的夜盘时段（需要长桥账户有夜盘行情权限）") }}
+    {{ check("crypto_enabled", cfg.crypto.enabled, "监控加密货币") }}
+    <p class="small muted">敏感度系数乘在“地板”门槛上：1 是默认，大于 1 更不容易报警（适合波动大的标的），小于 1 更灵敏。上面表格里改过的系数和这里的开关一起保存。</p>
+    <div class="buttons"><button type="submit">保存</button></div>
+  </form>
+</div>
+{% endblock %}

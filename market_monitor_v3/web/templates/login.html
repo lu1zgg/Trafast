@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}登录{% endblock %}
+{% block body %}
+<div class="login-wrap">
+  <h1>Trafast</h1>
+  <p class="sub">异动监控 · 管理后台</p>
+  <div class="card">
+    {% if not ready %}
+      <p><b>还没有管理员账号。</b></p>
+      <p>在服务器上运行下面的命令创建账号并绑定手机验证器（Google Authenticator、1Password 等）：</p>
+      <pre class="block">sudo mm web-passwd</pre>
+      <p class="muted small">出于安全考虑，网页上不提供注册。</p>
+    {% else %}
+      {% if error %}<div class="flash err">{{ error }}</div>{% endif %}
+      <form method="post" action="/login" autocomplete="on">
+        <div class="field">
+          <label for="username">用户名</label>
+          <input type="text" id="username" name="username" autocomplete="username" autocapitalize="off" spellcheck="false" required autofocus>
+        </div>
+        <div class="field">
+          <label for="password">密码</label>
+          <input type="password" id="password" name="password" autocomplete="current-password" required>
+        </div>
+        <div class="field">
+          <label for="code">验证器上的 6 位数字</label>
+          <input type="text" id="code" name="code" inputmode="numeric" pattern="[0-9 ]{6,7}" maxlength="7" autocomplete="one-time-code" required>
+        </div>
+        <button type="submit">登录</button>
+      </form>
+    {% endif %}
+  </div>
+  <p class="muted small">忘记密码或换手机：在服务器上重新运行 <code>sudo mm web-passwd</code>。</p>
+</div>
+{% endblock %}

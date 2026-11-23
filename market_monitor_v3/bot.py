@@ -13,7 +13,7 @@ from collections.abc import Callable
 from typing import Any, Protocol
 
 from .models import OutMsg
-from .outbox import ChatRef
+from .notifiers.telegram import ChatRef
 from .store import Store
 from .telegram import TelegramClient
 
@@ -52,6 +52,53 @@ class BotHooks(Protocol):
     async def mute(self, target: str, until: float, by: str) -> None: ...
     async def unmute(self, target: str | None) -> int: ...
     async def report_text(self) -> str: ...
+
+
+async def run_command(
+    hooks: BotHooks,
+    cmd: str,
+    args: list[str],
+    user_id: int | None,
+    who: str,
+    admins: set[int],
+    clock: Callable[[], float] = time.time,
+) -> str | None:
+    """Telegram 和 Discord 共用的命令处理。返回 HTML 文本；未知命令返回 None。"""
+    if cmd in ("help", "start"):
+        return HELP
+    if cmd == "status":
+        return await hooks.status_text()
+    if cmd == "params":
+        return hooks.params_text()
+    if cmd == "mutes":
+        return hooks.mutes_text()
+    if cmd == "report":
+        return await hooks.report_text()
+    if cmd in ("mute", "unmute"):
+        if admins and user_id not in admins:
+            return "没有权限：只有配置里的管理员可以静音或取消静音。"
+        if not args:
+            return f"用法：/{cmd} 代码" + (" [时长]，例如 /mute MU 2h" if cmd == "mute" else "|all")
+        target_raw = args[0]
+        if target_raw.lower() in ("all", "全部", "*"):
+            target: str | None = "*"
+        else:
+            target = hooks.resolve_symbol(target_raw)
+            if target is None:
+                return f"没找到标的 {target_raw}。"
+        if cmd == "mute":
+            dur = parse_duration(args[1] if len(args) > 1 else None)
+            if dur is None:
+                return "时长格式不对，例如 30m、2h、1d。"
+            until = clock() + dur
+            await hooks.mute(target, until, who)
+            name = "全部标的" if target == "*" else target
+            return f"已静音 {name}，{_fmt_dur(dur)}。静音期间的异动只记录不推送，运维消息照常。"
+        n = await hooks.unmute(None if target == "*" else target)
+        if target == "*":
+            return "已取消全部静音。" if n else "当前没有静音。"
+        return "已取消静音。" if n else "这个标的没有在静音。"
+    return None  # 未知命令不回应，避免和群里其他 bot 冲突
 
 
 class BotPoller:
@@ -149,47 +196,14 @@ class BotPoller:
                 expires_at=now + 120,
                 reply_to_tg=msg.get("message_id"),
                 silent=True,
+                channel="telegram",
             ),
         )
         await self.store.call(_log_control, now, who, text, reply[:200])
         self.notify_sender()
 
     async def dispatch(self, cmd: str, args: list[str], user_id: int | None, who: str) -> str | None:
-        if cmd in ("help", "start"):
-            return HELP
-        if cmd == "status":
-            return await self.hooks.status_text()
-        if cmd == "params":
-            return self.hooks.params_text()
-        if cmd == "mutes":
-            return self.hooks.mutes_text()
-        if cmd == "report":
-            return await self.hooks.report_text()
-        if cmd in ("mute", "unmute"):
-            if self.admins and user_id not in self.admins:
-                return "没有权限：只有配置里的管理员可以静音或取消静音。"
-            if not args:
-                return f"用法：/{cmd} 代码" + (" [时长]，例如 /mute MU 2h" if cmd == "mute" else "|all")
-            target_raw = args[0]
-            if target_raw.lower() in ("all", "全部", "*"):
-                target: str | None = "*"
-            else:
-                target = self.hooks.resolve_symbol(target_raw)
-                if target is None:
-                    return f"没找到标的 {target_raw}。"
-            if cmd == "mute":
-                dur = parse_duration(args[1] if len(args) > 1 else None)
-                if dur is None:
-                    return "时长格式不对，例如 30m、2h、1d。"
-                until = self.clock() + dur
-                await self.hooks.mute(target, until, who)
-                name = "全部标的" if target == "*" else target
-                return f"已静音 {name}，{_fmt_dur(dur)}。静音期间的异动只记录不推送，运维消息照常。"
-            n = await self.hooks.unmute(None if target == "*" else target)
-            if target == "*":
-                return "已取消全部静音。" if n else "当前没有静音。"
-            return "已取消静音。" if n else "这个标的没有在静音。"
-        return None  # 未知命令不回应，避免和群里其他 bot 冲突
+        return await run_command(self.hooks, cmd, args, user_id, who, self.admins, self.clock)
 
     async def _on_callback(self, cq: dict[str, Any]) -> None:
         data = cq.get("data") or ""
