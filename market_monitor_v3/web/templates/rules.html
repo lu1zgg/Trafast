@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% from "_macros.html" import hidden, num, text %}
+{% block title %}规则{% endblock %}
+{% block body %}
+<h1>告警规则</h1>
+<p class="muted">保存后立即生效，不用重启。当前规则版本 <code>{{ params.rule_version }}</code>（每条告警都会记下版本，方便以后对比效果）。</p>
+
+<form method="post" action="/rules">
+{{ hidden(s, rev) }}
+
+<div class="card">
+  <h2>灵敏度档位</h2>
+  <div class="row">
+    <div class="field">
+      <label for="f-preset">档位</label>
+      <select id="f-preset" name="preset">
+        {% for key, p in presets.items() %}
+        <option value="{{ key }}"{% if cfg.rules.preset == key %} selected{% endif %}>{{ p.label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+  </div>
+  <p class="small muted">档位决定每个时段的 z 门槛和直通线。灵敏报得多，克制报得少。下表是当前实际生效的门槛（已经算上下面的自定义覆盖）：</p>
+  <div class="table-wrap"><table>
+    <tr><th>时段</th><th>地板 1/5/15 分钟（%）</th><th class="num">z 门槛</th><th>直通线 1/5/15 分钟（%）</th></tr>
+    {% for sess in sessions %}{% set t = params.sessions[sess] %}
+    <tr>
+      <td>{{ '美股' if sess in stock_sessions else '加密' }} · {{ labels[sess] }}</td>
+      <td class="mono">{{ pcts(t.floor) }}</td>
+      <td class="num mono">{{ '%g'|format(t.z) }}</td>
+      <td class="mono">{{ pcts(t.bypass) }}</td>
+    </tr>
+    {% endfor %}
+  </table></div>
+  <div class="note small">
+    <b>怎么读：</b>某个窗口（1、5、15 分钟）的涨跌幅既要超过“地板”，又要超过该标的平时波动的 z 倍，才算异动；
+    超过“直通线”的不看 z，直接算异动。地板会再乘上标的页里的敏感度系数。
+  </div>
+</div>
+
+<div class="card">
+  <h2>按时段自定义 <span class="muted small">留空 = 跟随档位</span></h2>
+  <p class="small muted">三个数用逗号分开，单位是百分比。比如盘前地板想放宽成 0.8%、1.5%、2.2%，就在“地板”里填 <code>0.8, 1.5, 2.2</code>。</p>
+  <div class="table-wrap"><table class="ovr">
+    <tr><th>时段</th><th>地板（%）</th><th>z 门槛</th><th>直通线（%）</th></tr>
+    {% for sess in sessions %}{% set ov = cfg.rules.overrides.get(sess) %}{% set b = base.sessions[sess] %}
+    <tr>
+      <td>{{ '美股' if sess in stock_sessions else '加密' }} · {{ labels[sess] }}</td>
+      <td><input type="text" name="{{ sess }}_floor" value="{{ nums(ov.floor_pct) if ov else '' }}" placeholder="{{ pcts(b.floor)|replace(' / ', ', ') }}" aria-label="{{ labels[sess] }} 地板"></td>
+      <td><input class="narrow" type="number" step="0.5" min="1" name="{{ sess }}_z" value="{{ '%g'|format(ov.z) if ov and ov.z is not none else '' }}" placeholder="{{ '%g'|format(b.z) }}" aria-label="{{ labels[sess] }} z"></td>
+      <td><input type="text" name="{{ sess }}_bypass" value="{{ nums(ov.bypass_pct) if ov else '' }}" placeholder="{{ pcts(b.bypass)|replace(' / ', ', ') }}" aria-label="{{ labels[sess] }} 直通线"></td>
+    </tr>
+    {% endfor %}
+  </table></div>
+</div>
+
+<div class="card">
+  <h2>确认与分级</h2>
+  <div class="fields">
+    {{ num("confirm_ratio", cfg.rules.confirm_ratio, "站稳比例", "下一分钟还保留这个比例的涨跌幅才推送（0.6 = 60%），用来过滤插针", "0.05", 0.05, 1) }}
+    {{ num("fast_score", cfg.rules.fast_score, "直接推送得分", "得分达到这个值（或碰到直通线）不等确认，立即按 L3 推送", "0.1", 1.1) }}
+    {{ num("l2_score", cfg.rules.l2_score, "L2 得分", "得分达到这个值算 L2 明显", "0.1", 1) }}
+    {{ num("l2_turnover_mult", cfg.rules.l2_turnover_mult, "L2 成交额倍数", "成交额达到该时段常态的这个倍数，也算 L2", "0.5", 0.5) }}
+    {{ num("thin_turnover_frac", cfg.rules.thin_turnover_frac, "稀薄时段最低成交额", "夜盘和清早盘前：窗口成交额至少是该时段中位数的这个比例，过滤没量的跳价", "0.05", 0, 1) }}
+    {{ text("thin_pre_until", cfg.rules.thin_pre_until, "清早盘前截止（美东时间）", "这个时间之前的盘前按稀薄时段处理", "07:00", True) }}
+  </div>
+</div>
+
+<div class="card">
+  <h2>同一波异动的后续</h2>
+  <div class="fields">
+    {{ num("extend_floors", cfg.episode.extend_floors, "延伸幅度（个 5 分钟地板）", "同方向再走这么多才在原消息下回复“继续扩大”", "0.1", 0.1) }}
+    {{ num("max_replies", cfg.episode.max_replies, "每波最多回复几次", None, 1, 0) }}
+    {{ num("reply_gap_min", cfg.episode.reply_gap_min, "两次回复至少间隔（分钟）", "升级到 L3 不受限制", 1, 0) }}
+    {{ num("end_retrace", cfg.episode.end_retrace, "回撤多少算结束", "从最大幅度回吐这个比例就算这一波结束（0.5 = 一半）", "0.05", 0.05, 1) }}
+    {{ num("idle_end_min", cfg.episode.idle_end_min, "多久没有新高/新低算结束（分钟）", None, 1, 5) }}
+    {{ num("cooldown_min", cfg.episode.cooldown_min, "结束后冷却（分钟）", "冷却期内同一标的同方向不再开新告警", 1, 0) }}
+  </div>
+</div>
+
+<div class="card">
+  <h2>联动合并与限流</h2>
+  <div class="fields">
+    {{ num("window_s", cfg.merge.window_s, "联动合并窗口（秒）", "同市场同方向在这段时间内的异动合并成一条“同时异动”", 10, 0) }}
+    {{ num("max_new_per_min", cfg.merge.max_new_per_min, "每分钟最多几条新告警", "超过的合并进一条汇总", 1, 1) }}
+    {{ num("expiry_s", cfg.merge.expiry_s, "过期丢弃（秒）", "K 线收盘后这么久还没发出去（比如网络断了）就不再发", 10, 60) }}
+  </div>
+</div>
+
+<div class="buttons"><button type="submit">保存规则</button><span class="small muted">保存前会完整校验，有错不会写入。旧版本自动存档，可在“历史与审计”里一键恢复。</span></div>
+</form>
+{% endblock %}

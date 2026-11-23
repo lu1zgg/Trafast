@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% from "_macros.html" import hidden, move %}
+{% block title %}概览{% endblock %}
+{% block body %}
+<h1>概览</h1>
+
+{% if st is none %}
+<div class="flash err">
+  <b>连不上监控进程。</b>它可能没有运行，或正在重启（改了标的、渠道、密钥后会自动重启，约 15 秒）。
+  在服务器上可以用 <code>sudo systemctl status market-monitor</code> 和 <code>sudo journalctl -u market-monitor -n 50</code> 查看。
+</div>
+{% else %}
+<div class="card">
+  <div class="stats">
+    <div class="stat"><div class="k">运行时长</div><div class="v">{{ dur(st.uptime_s) }}</div></div>
+    <div class="stat"><div class="k">灵敏度档位</div><div class="v">{{ st.preset }}</div></div>
+    <div class="stat"><div class="k">规则版本</div><div class="v mono">{{ st.rule_version }}</div></div>
+    {% if st.us_session %}<div class="stat"><div class="k">美股当前时段</div><div class="v">{{ st.us_session }}</div></div>{% endif %}
+    <div class="stat"><div class="k">发件箱积压</div><div class="v">{{ st.backlog }}{% if st.backlog and st.backlog_age_s %} <span class="muted small">最久 {{ dur(st.backlog_age_s) }}</span>{% endif %}</div></div>
+  </div>
+</div>
+
+<div class="grid">
+  <div class="card">
+    <h2>数据源</h2>
+    <table>
+      {% for name, age in st.feeds.items() %}
+      <tr>
+        <td>{{ {'longbridge': '长桥（美股）', 'binance': 'Binance（加密）'}.get(name, name) }}</td>
+        <td>最近一根 K 线 {{ ago(age) }}</td>
+      </tr>
+      {% else %}
+      <tr><td class="muted">没有启用的数据源</td></tr>
+      {% endfor %}
+    </table>
+    {% if st.baseline_not_ready %}
+    <p class="small muted">基线还在积累（新加的标的需要几天历史数据才会开始判断）：{{ st.baseline_not_ready|join('、') }}</p>
+    {% endif %}
+  </div>
+  <div class="card">
+    <h2>推送渠道</h2>
+    <table>
+      {% for ch, c in st.channels.items() %}
+      <tr>
+        <td>{{ c.label }}</td>
+        <td>
+          {% if c.paused %}<span class="pill bad">暂停</span> <span class="small">{{ c.reason }}</span>
+          {% else %}<span class="pill ok">正常</span>{% endif %}
+        </td>
+        <td class="small muted">{% if c.last_ok_at %}上次送达 {{ fmt_ts(c.last_ok_at) }}{% endif %}</td>
+      </tr>
+      {% else %}
+      <tr><td class="muted">没有启用的推送渠道</td></tr>
+      {% endfor %}
+      {% if st.discord_gateway is not none %}
+      <tr>
+        <td>Discord 按钮与命令</td>
+        <td>{% if st.discord_gateway %}<span class="pill ok">已连接</span>{% else %}<span class="pill warn">连接中</span>{% endif %}</td>
+        <td></td>
+      </tr>
+      {% endif %}
+    </table>
+  </div>
+</div>
+
+<div class="card">
+  <h2>进行中的异动</h2>
+  {% if st.episodes %}
+  <div class="table-wrap"><table>
+    <tr><th>标的</th><th>级别</th><th class="num">最大幅度</th><th class="num">持续</th></tr>
+    {% for e in st.episodes %}
+    <tr><td><b>{{ e.symbol }}</b></td><td>{{ e.level }}</td><td class="num">{{ move(e.move) }}</td><td class="num">{{ e.minutes }} 分钟</td></tr>
+    {% endfor %}
+  </table></div>
+  {% else %}<p class="muted">现在没有进行中的异动。</p>{% endif %}
+</div>
+
+<div class="card">
+  <div class="card-head">
+    <h2>静音</h2>
+    {% if st.mutes %}
+    <form method="post" action="/unmute">{{ hidden(s) }}<input type="hidden" name="target" value="*"><button class="small secondary" type="submit">全部取消</button></form>
+    {% endif %}
+  </div>
+  {% if st.mutes %}
+  <table>
+    {% for target, until in st.mutes.items() %}
+    <tr>
+      <td><b>{{ '全部标的' if target == '*' else name(target) }}</b></td>
+      <td class="small muted">到 {{ fmt_ts(until) }}</td>
+      <td class="actions"><form method="post" action="/unmute">{{ hidden(s) }}<input type="hidden" name="target" value="{{ target }}"><button class="small secondary" type="submit">取消</button></form></td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}<p class="muted">没有静音。</p>{% endif %}
+  <h3>新增静音</h3>
+  <form method="post" action="/mute" class="row">
+    {{ hidden(s) }}
+    <div class="field grow">
+      <label for="mute-target">标的（如 NVDA、BTC；填 * 表示全部）</label>
+      <input type="text" id="mute-target" name="target" required autocomplete="off" autocapitalize="characters">
+    </div>
+    <div class="field">
+      <label for="mute-seconds">时长</label>
+      <select id="mute-seconds" name="seconds">
+        <option value="1800">30 分钟</option>
+        <option value="3600" selected>1 小时</option>
+        <option value="14400">4 小时</option>
+        <option value="43200">12 小时</option>
+        <option value="86400">1 天</option>
+        <option value="604800">7 天</option>
+      </select>
+    </div>
+    <button type="submit">静音</button>
+  </form>
+</div>
+
+<div class="card">
+  <h2>最近 3 天推送过的告警</h2>
+  {% if st.recent %}
+  <div class="table-wrap"><table>
+    <tr><th>时间（北京）</th><th>标的</th><th>时段</th><th>级别</th><th>窗口</th><th class="num">幅度</th></tr>
+    {% for a in st.recent %}
+    <tr>
+      <td class="small">{{ fmt_ts(a.ts) }}</td>
+      <td><b>{{ a.symbol }}</b></td>
+      <td>{{ a.session }}</td>
+      <td>{{ a.level }}</td>
+      <td>{{ a.k }} 分钟</td>
+      <td class="num">{{ move(a.move) }}</td>
+    </tr>
+    {% endfor %}
+  </table></div>
+  {% else %}<p class="muted">最近 3 天没有推送过告警。</p>{% endif %}
+</div>
+{% endif %}
+{% endblock %}

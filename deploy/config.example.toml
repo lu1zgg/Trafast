@@ -1,19 +1,59 @@
 # 异动监控 V3 配置。复制到 /etc/market-monitor/config.toml 后修改。
-# 密钥（Telegram token、长桥凭据、心跳地址）不要写在这里，写在 /etc/market-monitor/secrets.env。
-# 改完执行 `sudo mm check-config` 校验，然后 `sudo systemctl reload market-monitor` 热加载
-# （规则参数、静音等可以热加载；标的、群组、市场开关的变化需要 restart）。
+# 密钥（Telegram / Discord token、长桥凭据、心跳地址）不要写在这里，写在 /etc/market-monitor/secrets.env。
+# 两种改法：
+#   1. 网页后台（见 README「网页管理后台」）：保存时自动校验、存历史版本、让监控生效。
+#   2. 直接编辑本文件：改完执行 `sudo mm check-config` 校验，然后 `sudo systemctl reload market-monitor` 热加载
+#      （规则参数可以热加载；标的、推送渠道、市场开关的变化需要 restart）。
 
 [general]
 state_dir = "/var/lib/market-monitor"   # 数据库、备份、锁文件
 display_tz = "Asia/Shanghai"
 log_level = "INFO"
+control_socket = "/run/market-monitor/control.sock"   # 网页后台和监控进程之间的本机通道
 
 [telegram]
+enabled = true
 chat_id = -1001234567890        # 群组 ID（负数）。告警、运维消息、日报都发这个群
 admin_user_ids = []             # 留空 = 群里任何人都能用 /mute /unmute；填 Telegram 用户 ID 则只有这些人能用
 commands = true                 # 接收 /status /mute 等命令
 feedback_buttons = true         # 告警下面的 👍/👎 按钮
 silent_extension_replies = false
+
+[telegram.route]                # 这个渠道接收哪些消息
+alerts = true                   # 异动告警
+min_level = "L1"                # L1 全部 / L2 及以上 / L3 只要剧烈
+markets = ["US", "CRYPTO"]
+tradingview = true              # TradingView 转发来的告警
+ops = true                      # 运维消息（断流、恢复、后台登录）
+reports = true                  # 每日日报
+
+[discord]                       # Discord 机器人推送（可以和 Telegram 同时开）
+enabled = false
+channel_id = ""                 # 频道 ID：Discord 打开开发者模式后右键频道「复制频道 ID」
+admin_user_ids = []             # 留空 = 频道里任何人都能用 /mute /unmute
+commands = true                 # 注册斜杠命令 /status /mute /report 等
+feedback_buttons = true
+
+[discord.route]
+alerts = true
+min_level = "L1"
+markets = ["US", "CRYPTO"]
+tradingview = true
+ops = true
+reports = true
+
+[tradingview]                   # 接收 TradingView 告警 webhook 并转发（地址在网页后台里看）
+enabled = false
+max_per_min = 20                # 每分钟最多转发多少条，防止告警写错刷屏
+dedup_s = 60                    # 同样内容在这段时间内只转发一次
+
+[web]                           # 网页管理后台（单独的 market-monitor-web 服务）
+listen_host = "127.0.0.1"       # 只听本机，由 Caddy 反向代理出 HTTPS；不要改成 0.0.0.0
+listen_port = 8787
+session_hours = 12              # 登录多久后要重新登录
+cookie_secure = true            # 通过 HTTPS 或 SSH 隧道（localhost）访问时保持 true
+login_max_failures = 5          # 连续输错几次锁定
+login_lock_min = 15
 
 [rules]
 preset = "sensitive"            # sensitive 灵敏 / balanced 均衡 / conservative 克制

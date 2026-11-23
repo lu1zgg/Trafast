@@ -1,0 +1,29 @@
+# Caddy 反向代理：给网页后台加 HTTPS（证书自动申请和续期）。
+# 一般不用手动改这个文件，运行 `sudo bash deploy/setup-web.sh 你的域名` 会生成 /etc/caddy/trafast.caddy。
+# 手动使用时把 {$TRAFAST_DOMAIN} 换成你自己的域名（DNS 要先解析到这台 VPS，80 和 443 端口要放行）。
+
+{$TRAFAST_DOMAIN} {
+	encode gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+
+	# 可选：只允许 TradingView 的服务器调用 webhook（IP 以 TradingView 官方文档为准）
+	# @tv_outsider {
+	# 	path /hooks/tradingview/*
+	# 	not remote_ip 52.89.214.238 34.212.75.30 54.218.53.128 52.32.178.7
+	# }
+	# respond @tv_outsider 404
+
+	request_body {
+		max_size 1MB
+	}
+
+	reverse_proxy 127.0.0.1:8787
+
+	log {
+		output discard
+	}
+}

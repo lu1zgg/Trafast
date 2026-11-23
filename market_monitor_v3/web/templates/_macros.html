@@ -1,0 +1,69 @@
+{# 每个改配置的表单都带 csrf 和 rev（打开页面时配置文件的指纹，防止覆盖别人刚改的内容） #}
+{% macro hidden(s, rev=None) -%}
+<input type="hidden" name="csrf" value="{{ s.csrf }}">
+{%- if rev %}<input type="hidden" name="rev" value="{{ rev }}">{% endif %}
+{%- endmacro %}
+
+{% macro check(name, checked, label, hint=None, form=None) -%}
+<label class="check"><input type="checkbox" name="{{ name }}"{% if form %} form="{{ form }}"{% endif %}{% if checked %} checked{% endif %}>
+<span>{{ label }}{% if hint %}<br><span class="muted small">{{ hint }}</span>{% endif %}</span></label>
+{%- endmacro %}
+
+{% macro num(name, value, label, hint=None, step="any", min=None, max=None) -%}
+<div class="field">
+  <label for="f-{{ name }}">{{ label }}</label>
+  <input type="number" id="f-{{ name }}" name="{{ name }}" value="{{ value }}" step="{{ step }}"{% if min is not none %} min="{{ min }}"{% endif %}{% if max is not none %} max="{{ max }}"{% endif %} required>
+  {% if hint %}<div class="hint">{{ hint }}</div>{% endif %}
+</div>
+{%- endmacro %}
+
+{% macro text(name, value, label, hint=None, placeholder="", required=False) -%}
+<div class="field">
+  <label for="f-{{ name }}">{{ label }}</label>
+  <input type="text" id="f-{{ name }}" name="{{ name }}" value="{{ value }}" placeholder="{{ placeholder }}" autocomplete="off"{% if required %} required{% endif %}>
+  {% if hint %}<div class="hint">{{ hint }}</div>{% endif %}
+</div>
+{%- endmacro %}
+
+{# 密钥输入框：从不回显明文。留空 = 不改，勾“清空” = 删除 #}
+{% macro secret(name, masked, label, hint=None) -%}
+<div class="field">
+  <label for="f-{{ name }}">{{ label }}
+    {% if masked %}<span class="pill ok">{{ masked }}</span>{% else %}<span class="pill">未设置</span>{% endif %}
+  </label>
+  <input type="password" id="f-{{ name }}" name="{{ name }}" value="" placeholder="{{ '留空表示不修改' if masked else '粘贴到这里' }}" autocomplete="new-password" spellcheck="false">
+  {% if masked %}<label class="check"><input type="checkbox" name="{{ name }}_clear"><span>清空</span></label>{% endif %}
+  {% if hint %}<div class="hint">{{ hint }}</div>{% endif %}
+</div>
+{%- endmacro %}
+
+{# 渠道订阅：这个渠道收哪些消息 #}
+{% macro route(prefix, r) -%}
+<fieldset>
+  <legend>这个渠道接收</legend>
+  <div class="checks">
+    {{ check(prefix ~ "_alerts", r.alerts, "异动告警") }}
+    {{ check(prefix ~ "_m_US", "US" in r.markets, "美股") }}
+    {{ check(prefix ~ "_m_CRYPTO", "CRYPTO" in r.markets, "加密货币") }}
+  </div>
+  <div class="row">
+    <div class="field">
+      <label for="f-{{ prefix }}_min_level">告警最低级别</label>
+      <select id="f-{{ prefix }}_min_level" name="{{ prefix }}_min_level">
+        {% for lv, txt in [("L1", "L1 及以上（全部）"), ("L2", "L2 及以上"), ("L3", "只要 L3 剧烈")] %}
+        <option value="{{ lv }}"{% if r.min_level == lv %} selected{% endif %}>{{ txt }}</option>
+        {% endfor %}
+      </select>
+    </div>
+  </div>
+  <div class="checks">
+    {{ check(prefix ~ "_tradingview", r.tradingview, "TradingView 告警") }}
+    {{ check(prefix ~ "_ops", r.ops, "运维消息（掉线、恢复、后台登录）") }}
+    {{ check(prefix ~ "_reports", r.reports, "每日日报") }}
+  </div>
+</fieldset>
+{%- endmacro %}
+
+{% macro move(x) -%}
+<span class="{{ 'up' if x >= 0 else 'down' }}">{{ '🟢' if x >= 0 else '🔴' }} {{ '%+.2f'|format(x) }}%</span>
+{%- endmacro %}

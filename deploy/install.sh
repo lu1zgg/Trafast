@@ -23,36 +23,50 @@ apt-get update -qq
 apt-get install -y -qq python3-venv chrony >/dev/null
 systemctl enable --now chrony >/dev/null 2>&1 || true
 
-echo "==> 创建 monitor 用户和目录"
+echo "==> 创建 monitor、mmweb 用户和目录"
 id monitor >/dev/null 2>&1 || useradd --system --home-dir "$STATE" --shell /usr/sbin/nologin monitor
+# mmweb 跑网页后台，主组是 monitor：能改配置、连监控的控制通道；监控进程本身只读配置
+id mmweb >/dev/null 2>&1 || useradd --system --gid monitor --home-dir /var/lib/market-monitor-web --shell /usr/sbin/nologin mmweb
 install -d -o monitor -g monitor -m 0750 "$STATE"
-install -d -m 0755 "$ETC"
+install -d -o mmweb -g monitor -m 2750 "$ETC"
+chown mmweb:monitor "$ETC"
+chmod 2750 "$ETC"
+install -d -o mmweb -g monitor -m 2750 "$ETC/history"
 
 echo "==> 创建虚拟环境并安装（$SRC/.venv）"
 python3 -m venv "$SRC/.venv"
 "$SRC/.venv/bin/pip" install -q --upgrade pip
-if ! "$SRC/.venv/bin/pip" install -q "$SRC[longbridge]"; then
+if ! "$SRC/.venv/bin/pip" install -q "$SRC[longbridge,web]"; then
     echo "   长桥 SDK 安装失败，先装不带长桥的版本（只跑加密货币不受影响）"
-    "$SRC/.venv/bin/pip" install -q "$SRC"
+    "$SRC/.venv/bin/pip" install -q "$SRC[web]"
 fi
 
 echo "==> 配置文件"
+# 配置：mmweb 可写、monitor 组只读；密钥：只有 mmweb 和 root 能读（systemd 以 root 读取后传给监控）
 if [ ! -f "$ETC/config.toml" ]; then
-    install -m 0644 "$SRC/deploy/config.example.toml" "$ETC/config.toml"
+    install -m 0640 -o mmweb -g monitor "$SRC/deploy/config.example.toml" "$ETC/config.toml"
     echo "   已生成 $ETC/config.toml（需要改 chat_id）"
 else
+    chown mmweb:monitor "$ETC/config.toml"
+    chmod 640 "$ETC/config.toml"
     echo "   $ETC/config.toml 已存在，保留"
 fi
 if [ ! -f "$ETC/secrets.env" ]; then
-    install -m 0600 -o root -g root "$SRC/deploy/secrets.env.example" "$ETC/secrets.env"
+    install -m 0600 -o mmweb -g monitor "$SRC/deploy/secrets.env.example" "$ETC/secrets.env"
     echo "   已生成 $ETC/secrets.env（需要填 TELEGRAM_BOT_TOKEN）"
 else
+    chown mmweb:monitor "$ETC/secrets.env"
     chmod 600 "$ETC/secrets.env"
     echo "   $ETC/secrets.env 已存在，保留"
+fi
+if [ -f "$ETC/web-auth.json" ]; then
+    chown mmweb:monitor "$ETC/web-auth.json"
+    chmod 600 "$ETC/web-auth.json"
 fi
 
 echo "==> systemd 服务和 mm 命令"
 sed "s#/opt/market-monitor#$SRC#g" "$SRC/deploy/market-monitor.service" >/etc/systemd/system/market-monitor.service
+sed "s#/opt/market-monitor#$SRC#g" "$SRC/deploy/market-monitor-web.service" >/etc/systemd/system/market-monitor-web.service
 sed "s#/opt/market-monitor#$SRC#g" "$SRC/deploy/mm" >/usr/local/bin/mm
 chmod 0755 /usr/local/bin/mm
 systemctl daemon-reload
@@ -67,4 +81,7 @@ cat <<MSG
   4. sudo mm test-telegram           # 往群里发一条测试消息
   5. sudo systemctl start market-monitor
   6. journalctl -u market-monitor -f # 看日志
+
+可选：网页管理后台（在浏览器里加减标的、改规则、配推送渠道）
+  sudo bash deploy/setup-web.sh 你的域名   # 详见 README「网页管理后台」
 MSG

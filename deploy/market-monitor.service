@@ -16,15 +16,19 @@ WorkingDirectory=/var/lib/market-monitor
 ExecStart=/opt/market-monitor/.venv/bin/monitor run --config /etc/market-monitor/config.toml
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
-RestartSec=10
+# 网页后台改了标的、推送渠道或密钥后，监控会自己退出，由这里 5 秒后拉起
+RestartSec=5
 # 首次启动要从 Binance 拉 14 天 K 线做基线，给足时间
 TimeoutStartSec=600
 TimeoutStopSec=30
 WatchdogSec=60
 StateDirectory=market-monitor
 StateDirectoryMode=0750
+# 本机控制通道 /run/market-monitor/control.sock（只有 monitor 组能连，网页后台就在这个组里）
+RuntimeDirectory=market-monitor
+RuntimeDirectoryMode=0750
 
-# 加固：只读系统、只能写状态目录、不开任何监听端口
+# 加固：只读系统（配置只读）、只能写状态目录、不开任何网络监听端口
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true

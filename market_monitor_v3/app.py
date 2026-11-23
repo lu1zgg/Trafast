@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import fcntl
+import html
 import logging
 import math
 import os
@@ -613,6 +614,13 @@ class Runtime:
             return {"ok": True}
         if cmd == "tv_alert":
             return await self.tradingview_alert(req.get("alert") or {})
+        if cmd == "ops":
+            # 网页后台的安全提醒（登录、锁定）：发到运维消息
+            assert self.health is not None
+            text = str(req.get("text") or "")[:500]
+            if text:
+                await self.health.ops(f"web:{int(self.clock() * 1000)}", "🔐 后台：" + html.escape(text))
+            return {"ok": True}
         return {"ok": False, "error": f"未知命令 {cmd}"}
 
     async def tradingview_alert(self, alert: dict[str, Any]) -> dict[str, Any]:
