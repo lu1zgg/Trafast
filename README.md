@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/logo/trafast-logo-256.png" width="128" alt="Trafast"></p>
+
 # Trafast · 异动监控 V3
 
 美股正股（含盘前、盘后、夜盘）和加密货币现货的价格异动监控，推送到 Telegram 群。
@@ -236,3 +238,7 @@ market_monitor_v3/
   cli.py         monitor 命令
 deploy/          systemd 服务、install.sh、upgrade.sh、mm、配置和密钥示例
 ```
+
+## Logo
+
+`assets/logo/` 里有 SVG 源文件和 640/512/256/128/64/32 的 PNG。Telegram bot 头像用 `trafast-logo-640.png`，在 BotFather 里发 `/setuserpic` 上传。
