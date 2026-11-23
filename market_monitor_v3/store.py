@@ -397,6 +397,15 @@ class Store:
         r = self.c.execute(q, (symbol,)).fetchone()
         return r["t"]
 
+    def last_close(self, symbol: str, session: str, before_ts: int | None = None) -> float | None:
+        q = "SELECT c FROM bars_1m WHERE symbol=? AND session=? AND synthetic=0"
+        args: list = [symbol, session]
+        if before_ts is not None:
+            q += " AND ts<?"
+            args.append(before_ts)
+        r = self.c.execute(q + " ORDER BY ts DESC LIMIT 1", args).fetchone()
+        return r["c"] if r else None
+
     def first_bar_ts(self, symbol: str, since_ts: int) -> int | None:
         r = self.c.execute(
             "SELECT MIN(ts) AS t FROM bars_1m WHERE symbol=? AND ts>=? AND synthetic=0", (symbol, since_ts)

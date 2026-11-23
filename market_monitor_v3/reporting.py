@@ -17,6 +17,7 @@ OUTCOME_LABELS = {
     "wick_return": "插针回落",
     "retrace": "回吐",
     "thin": "成交太少",
+    "stale_price": "疑似旧价（前收回报）",
     "cooldown": "冷却期",
     "muted": "静音",
     "expired_pending": "确认超时",

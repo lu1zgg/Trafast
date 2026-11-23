@@ -5,8 +5,11 @@
 """
 from __future__ import annotations
 
+import logging
+import math
 from collections import Counter
 from collections.abc import Callable, Iterable
+from dataclasses import replace
 
 from .baseline import Baselines
 from .config import AppConfig, Params
@@ -17,6 +20,8 @@ from .models import Bar, Episode, RootMessage, market_of
 from .sessions import UsCalendar, crypto_session
 from .sink import Sink
 from .windows import SymbolHistory
+
+log = logging.getLogger(__name__)
 
 
 class Engine:
@@ -44,6 +49,8 @@ class Engine:
         self.last_bar_at: dict[str, float] = {}
         self._last_eval: dict[str, tuple[int, bool]] = {}
         self._last_gc = 0.0
+        # 每只美股最近一次盘中（REG）收盘价，用来识别盘外按前收回报的旧价
+        self.ref_close: dict[str, float] = {}
 
     # ---- 配置与状态 ----
     def set_params(self, params: Params) -> None:
@@ -72,8 +79,30 @@ class Engine:
             if not b.session:
                 b.session = self.session_for(b.symbol, b.ts)
             h.add(b)
+            self._note_ref(b)
             n += 1
         return n
+
+    def set_ref_close(self, symbol: str, price: float | None) -> None:
+        if price and price > 0:
+            self.ref_close[symbol] = price
+
+    def _note_ref(self, bar: Bar) -> None:
+        if bar.session == "REG" and not bar.synthetic and bar.c > 0 and market_of(bar.symbol) == "US":
+            self.ref_close[bar.symbol] = bar.c
+
+    def _stale_print(self, bar: Bar, h: SymbolHistory) -> bool:
+        """盘外这根 K 线收在上一交易日盘中收盘价上，而上一根离那里还很远：多半是前收参考价成交，不是真实价格。"""
+        if bar.session == "REG" or market_of(bar.symbol) != "US":
+            return False
+        ref = self.ref_close.get(bar.symbol)
+        prev = h.get(bar.ts - 60)
+        if not ref or prev is None or prev.c <= 0 or bar.c <= 0:
+            return False
+        tol = self.params.rules.stale_price_tol
+        if abs(math.log(bar.c / ref)) > tol:
+            return False
+        return abs(math.log(prev.c / ref)) > max(4 * tol, self.params.floor(bar.symbol, bar.session, 1))
 
     def restore(self, episodes: list[Episode], roots: list[RootMessage]) -> None:
         self.merger.restore(roots)
@@ -115,12 +144,24 @@ class Engine:
 
         self.last_bar_at[sym] = now
         self.stats["synthetic_bars" if bar.synthetic else "bars"] += 1
+        self._note_ref(bar)
         if bar.session == "CLOSED":
             return
         if bar.close_ts < now - self.params.merge.expiry_s:
             self.stats["stale_bars"] += 1
             return
         ev = evaluate(bar, h, self.params, self.baselines, self.cal.is_thin)
+        if ev.candidate is not None and self._stale_print(bar, h):
+            log.warning(
+                "疑似旧价 %s %s %s：收 %.4f ≈ 前收 %.4f，上一根 %.4f，成交额 %.0f，来源 %s",
+                sym, bar.session, bar.ts, bar.c, self.ref_close[sym], h.get(bar.ts - 60).c, bar.turnover, bar.source,
+            )
+            self.stats["stale_price"] += 1
+            self.episodes.reject(ev.candidate, "stale_price")
+            ev.candidate = None
+            # 窗口里不留这根坏价，否则下一根“回到原价”会被当成反向异动，5/15 分钟窗口也会被污染 15 分钟
+            pc = h.get(bar.ts - 60).c
+            h.add(replace(bar, o=pc, h=pc, l=pc, c=pc))
         self._last_eval[sym] = (bar.ts, ev.candidate is not None)
         self.episodes.on_bar(bar, ev, now)
 

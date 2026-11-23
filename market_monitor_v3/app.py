@@ -248,6 +248,8 @@ class Runtime:
         since = int(now) - 40 * 60
         for sym in self.cfg.all_symbols():
             bars = await self.store.call(Store.load_recent_bars, sym, since)
+            if market_of(sym) == "US":
+                self.engine.set_ref_close(sym, await self.store.call(Store.last_close, sym, "REG"))
             self.engine.seed_history(bars)
             last = await self.store.call(Store.last_bar_ts, sym)
             if last is not None:

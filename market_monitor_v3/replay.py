@@ -173,6 +173,13 @@ def run_replay(
         lo = bisect.bisect_left(idx, start_ts - 40 * 60)
         hi = bisect.bisect_left(idx, start_ts)
         seed.extend(by_sym[sym][lo:hi])
+    for sym in stocks:
+        idx = ts_index[sym]
+        hi = bisect.bisect_left(idx, start_ts)
+        for b in reversed(by_sym[sym][:hi]):
+            if b.session == "REG" and not b.synthetic:
+                engine.set_ref_close(sym, b.c)
+                break
     engine.seed_history(seed)
 
     minute_bars: dict[int, list[Bar]] = defaultdict(list)

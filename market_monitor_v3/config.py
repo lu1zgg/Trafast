@@ -202,6 +202,12 @@ class RulesCfg(_M):
     l2_turnover_mult: float = Field(3.0, gt=0)
     thin_turnover_frac: float = Field(0.25, ge=0, le=1)
     thin_pre_until: str = "07:00"  # 美东时间；之前的盘前按稀薄时段处理
+    # 这些时段里，快速通道（L3）也要等下一根 K 线确认。盘外成交稀薄，单根坏价（例如按上一交易日收盘价
+    # 回报的“前收参考价”成交）会直接拉出 -5% 的假 K 线；多等 1 分钟就能挡掉。盘中仍然收盘即推。
+    fast_confirm_sessions: list[str] = Field(default_factory=lambda: ["PRE", "POST", "ON"])
+    # 盘外 K 线收盘价和上一交易日盘中收盘价几乎一样（差距 ≤ 这个比例），而上一根还离得很远：
+    # 判定为前收参考价回报的旧价，不算异动
+    stale_price_tol: float = Field(0.0005, ge=0, le=0.01)
     baseline_sessions: int = Field(20, ge=3)
     baseline_min_sessions: int = Field(5, ge=1)
     crypto_baseline_days: int = Field(14, ge=2)
@@ -209,6 +215,14 @@ class RulesCfg(_M):
     overrides: dict[str, SessionOverride] = Field(default_factory=dict)
 
     _v_thin = field_validator("thin_pre_until")(_check_hhmm)
+
+    @field_validator("fast_confirm_sessions")
+    @classmethod
+    def _known_confirm_sessions(cls, v: list[str]) -> list[str]:
+        bad = [k for k in v if k not in STOCK_SESSIONS + CRYPTO_SESSIONS]
+        if bad:
+            raise ValueError(f"未知时段 {bad}，可用 {STOCK_SESSIONS + CRYPTO_SESSIONS}")
+        return v
 
     @field_validator("overrides")
     @classmethod

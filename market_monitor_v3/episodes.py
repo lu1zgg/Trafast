@@ -132,10 +132,15 @@ class EpisodeManager:
             ):
                 # 插针收回来的那一段，不算反方向异动
                 self._decide(cand, "wick_return", "L0")
-            elif cand.fast:
+            elif cand.fast and cand.session not in self.params.rules.fast_confirm_sessions:
                 self._open(tr, cand, "L3", None, bar, now)
             else:
+                # 盘外的快速通道也先确认：单根坏价下一分钟就回去了
                 tr.pending = cand
+
+    def reject(self, cand: Candidate, outcome: str) -> None:
+        """引擎层面判定为数据问题的候选：只记录，不进状态机。"""
+        self._decide(cand, outcome, "L0")
 
     def on_tick(self, now: float) -> None:
         ecfg = self.params.episode
