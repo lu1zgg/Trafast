@@ -57,7 +57,7 @@ async def bot(tmp_path):
 
 
 def upd(uid, text, chat=CHAT, user=42):
-    return {"update_id": uid, "message": {"message_id": 500 + uid, "chat": {"id": chat}, "from": {"id": user, "username": "louis"}, "text": text}}
+    return {"update_id": uid, "message": {"message_id": 500 + uid, "chat": {"id": chat}, "from": {"id": user, "username": "alice"}, "text": text}}
 
 
 async def outbox(store):
