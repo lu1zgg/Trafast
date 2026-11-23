@@ -88,7 +88,7 @@ def test_reversal_beyond_anchor_opens_new_episode():
     t = h.bars(S, t, [101.2, 101.2])  # 上涨 L3
     h.bars(S, t, [99.5, 99.5])  # 跌穿起点 1.2%（反向 L3）
     sends = h.sends()
-    assert len(sends) == 2 and "▼" in sends[1].text
+    assert len(sends) == 2 and sends[1].text.startswith("🔴")
     assert any(o.kind == "edit" and "另起一条" in o.text for o in h.outs)
 
 

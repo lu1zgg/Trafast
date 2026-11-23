@@ -12,9 +12,11 @@ from tests.helpers import random_walk, utc_ts
 def test_pct_and_money():
     assert pct(math.log(1.024)) == "+2.4%"
     assert pct(math.log(0.9967)) == "-0.33%"
-    assert money(3_200_000, "美元") == "320 万美元"
-    assert money(1_000_000, "USDT") == "100 万 USDT"
-    assert money(250_000_000, "USDT") == "2.50 亿 USDT"
+    assert money(3_620_000) == "$3.62M"
+    assert money(845_300) == "$845.30K"
+    assert money(1_250_000_000) == "$1.25B"
+    assert money(512) == "$512.00"
+    assert money(1_000_000, "USDT") == "1.00M USDT"
 
 
 def test_names_and_plain():
@@ -48,3 +50,52 @@ def test_baseline_returns_stay_inside_instance():
     b = [Bar("X", 0, 1, 1, 1, 1), Bar("X", 60, 1, 1, 1, 1), Bar("X", 120, 2, 2, 2, 2)]
     st = compute_symbol_baseline(b, lambda x: "CWD", lambda x: "A" if x.ts < 120 else "B", 10, 1)
     assert st[("CWD", 1)].n_returns == 1
+
+
+def _card(symbol="NVDA.US", direction=-1, **kw):
+    card = {
+        "ep": "e1",
+        "symbol": symbol,
+        "market": "US" if symbol.endswith(".US") else "CRYPTO",
+        "direction": direction,
+        "level": "L3",
+        "session": "PRE",
+        "k": 1,
+        "d": math.log(134.03 / 136.66),
+        "price": 134.03,
+        "p0": 136.66,
+        "retained": None,
+        "hits": [[1, math.log(0.981)], [5, math.log(0.976)], [15, math.log(0.973)]],
+        "turnover": 3_620_000,
+        "turnover_ratio": 2.1,
+        "close_ts": utc_ts(2026, 11, 23, 9, 38),
+        "end": None,
+    }
+    card.update(kw)
+    return card
+
+
+def test_card_template():
+    from market_monitor_v3.render import DIVIDER, card_text
+
+    text = card_text(_card())
+    lines = text.split("\n")
+    assert lines[0] == "🔴 <b>NVDA</b> <b>-1.9%</b>｜1 分钟｜L3 剧烈"
+    assert lines[1] == "现价 <b>$134.03</b>（盘前）｜起点 <b>$136.66</b>"
+    assert lines.count(DIVIDER) == 3
+    assert "1 分钟 <b>-1.9%</b>｜5 分钟 <b>-2.4%</b>｜15 分钟 <b>-2.7%</b>" in lines
+    assert "1 分钟 <b>$3.62M</b>｜该时段常态的 <b>2.1 倍</b>" in lines
+    assert lines[-1] == "北京 11-23 17:38｜美东 04:38"
+    up = card_text(_card(direction=1, d=math.log(1.02), retained=0.72, hits=[[1, math.log(1.02)]]))
+    assert up.startswith("🟢") and "多窗口" not in up and "仍保留 <b>72%</b>" in up
+
+
+def test_group_lists_every_member_in_full_and_stays_under_limit():
+    from market_monitor_v3.render import MAX_TEXT, cards_text, to_plain
+
+    cards = [_card(), _card("INTC.US", d=math.log(0.982), end={"max": -0.018, "close": -0.002, "minutes": 3, "reason": "idle"})]
+    text = cards_text(cards)
+    assert "同时异动（1）" in text and text.count("现价") == 2 and text.count("成交额") == 2
+    assert "INTC" in to_plain(text) and "已结束：最大 <b>-1.8%</b>" in text
+    many = cards_text([_card(f"S{i}.US") for i in range(40)])
+    assert len(to_plain(many)) <= MAX_TEXT and "S1</b>" in many and "个标的未展开" in many

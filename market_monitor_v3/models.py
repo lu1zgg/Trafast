@@ -176,8 +176,15 @@ class RootMessage:
     end_lines: list[str] = field(default_factory=list)
     buttons: list[list[dict[str, str]]] | None = None
     rev: int = 0
+    # 新版卡片：每个标的一张，见 render.card_from。为空时按旧版字段（lead_html + members + end_lines）渲染，
+    # 兼容升级前存进数据库的消息和“异动过多”摘要。
+    cards: list[dict[str, Any]] = field(default_factory=list)
 
     def text(self) -> str:
+        if self.cards:
+            from .render import cards_text
+
+            return cards_text(self.cards)
         parts = [self.lead_html]
         if self.members:
             parts.append("同时：" + "，".join(self.members))

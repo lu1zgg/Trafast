@@ -98,7 +98,8 @@ def test_correlated_drop_merged(res):
         assert name in text
     assert "同时" in text
     ends = [m for m in res.outs if m.kind == "edit" and m.parent_key == msgs[0].key]
-    assert ends and all(n in to_plain(ends[-1].text) for n in ("BTC 已结束", "ETH 已结束", "SOL 已结束"))
+    final = to_plain(ends[-1].text) if ends else ""
+    assert final.count("已结束") == 3 and all(n in final for n in ("BTC", "ETH", "SOL"))
 
 
 def test_big_move_extends_upgrades_and_retrace_not_pushed(res):

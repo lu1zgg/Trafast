@@ -15,7 +15,10 @@ def test_same_minute_same_direction_merged():
     h.multi(t, {"BTCUSDT": 101.6, "ETHUSDT": 101.9, "SOLUSDT": 100.0})
     sends = h.sends()
     assert len(sends) == 1
-    assert "同时：" in sends[0].text
+    text = sends[0].text
+    assert "同时异动（1）" in text
+    # 联动标的也用完整卡片展开，不再缩成一行
+    assert text.count("现价 <b>$") == 2 and text.count("多窗口") + text.count("成交额") >= 2
 
 
 def test_late_joiner_is_edited_in():
