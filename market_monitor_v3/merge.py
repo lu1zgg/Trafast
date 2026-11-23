@@ -153,6 +153,8 @@ class Merger:
                 expires_at=self._expires(g.members),
                 level=lead.level,
                 buttons=root.buttons,
+                market=g.market,
+                direction=g.direction,
             )
         )
         self.sent.append(now)
@@ -197,6 +199,7 @@ class Merger:
                 expires_at=self._expires(all_members),
                 level=top,
                 buttons=root.buttons,
+                market=root.market,
             )
         )
         self.sent.append(now)
@@ -222,6 +225,8 @@ class Merger:
                     created_at=now,
                     expires_at=oa.close_ts + self.params.merge.expiry_s,
                     level="L3",
+                    market=oa.cand.market,
+                    direction=oa.cand.direction,
                 )
             )
         self._emit_edit(root, now)
@@ -240,5 +245,7 @@ class Merger:
                 expires_at=now + 1800,
                 buttons=root.buttons,
                 silent=True,
+                market=root.market,
+                direction=root.direction,
             )
         )

@@ -60,18 +60,26 @@ def build_daily_report(store: Store, cfg: AppConfig, params: Params, cal: UsCale
     )
 
     # 消息
-    sent = {"send": 0, "reply": 0}
+    sent: dict[str, dict[str, int]] = defaultdict(lambda: {"send": 0, "reply": 0})
     bad = defaultdict(int)
     for r in c.execute(
-        "SELECT kind, status, COUNT(*) AS n FROM outbox WHERE created_at>=? AND created_at<? "
-        "AND kind IN ('send','reply') GROUP BY kind, status",
+        "SELECT channel, kind, status, COUNT(*) AS n FROM outbox WHERE created_at>=? AND created_at<? "
+        "AND kind IN ('send','reply') GROUP BY channel, kind, status",
         (start, end),
     ):
         if r["status"] == "sent":
-            sent[r["kind"]] += r["n"]
+            sent[r["channel"]][r["kind"]] += r["n"]
         elif r["status"] in ("failed", "expired", "unknown", "dropped"):
             bad[r["status"]] += r["n"]
-    lines.append(f"消息：首发 {sent['send']} 条，回复 {sent['reply']} 条")
+    labels = {"telegram": "Telegram", "discord": "Discord"}
+    if len(sent) <= 1:
+        one = next(iter(sent.values()), {"send": 0, "reply": 0})
+        lines.append(f"消息：首发 {one['send']} 条，回复 {one['reply']} 条")
+    else:
+        lines.append(
+            "消息："
+            + "；".join(f"{labels.get(ch, ch)} 首发 {v['send']} 条、回复 {v['reply']} 条" for ch, v in sorted(sent.items()))
+        )
 
     # 被挡下的候选
     l0 = {

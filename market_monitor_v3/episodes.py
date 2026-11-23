@@ -218,6 +218,8 @@ class EpisodeManager:
                         expires_at=bar.close_ts + self.params.merge.expiry_s,
                         level=upgrade or ep.level,
                         silent=self.silent_ext and upgrade != "L3",
+                        market=ep.market,
+                        direction=ep.direction,
                     )
                 )
                 ep.last_report = max(move, ep.last_report)

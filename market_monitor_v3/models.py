@@ -161,6 +161,9 @@ class OutMsg:
     level: str | None = None
     silent: bool = False
     buttons: list[list[dict[str, str]]] | None = None
+    market: str | None = None  # US / CRYPTO / TV（TradingView 转发），用于按渠道筛选
+    direction: int = 0  # 涨跌方向，Discord 用来给卡片上色
+    channel: str | None = None  # 只发到这个渠道（命令回复）；None = 按各渠道的订阅规则发
 
 
 @dataclass

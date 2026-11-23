@@ -102,16 +102,90 @@ class GeneralCfg(_M):
     state_dir: str = "/var/lib/market-monitor"
     display_tz: str = "Asia/Shanghai"
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
+    # 本机控制通道（网页后台用它重载配置、查状态）；目录由 systemd 的 RuntimeDirectory 建
+    control_socket: str = "/run/market-monitor/control.sock"
+
+
+class RouteCfg(_M):
+    """一个推送渠道收哪些消息。"""
+
+    alerts: bool = True  # 异动告警
+    min_level: Literal["L1", "L2", "L3"] = "L1"  # 只收这个级别及以上
+    markets: list[Literal["US", "CRYPTO"]] = Field(default_factory=lambda: ["US", "CRYPTO"])
+    tradingview: bool = True  # TradingView 转发的告警
+    ops: bool = True  # 运维消息
+    reports: bool = True  # 日报
+
+    def to_route(self):  # noqa: ANN201
+        from .notifiers import Route
+
+        return Route(
+            alerts=self.alerts,
+            min_level=self.min_level,
+            markets=tuple(self.markets),
+            tradingview=self.tradingview,
+            ops=self.ops,
+            reports=self.reports,
+        )
 
 
 class TelegramCfg(_M):
-    chat_id: int | str
+    enabled: bool = True
+    chat_id: int | str = 0  # 群组 ID（负数）；启用时必填
     admin_user_ids: list[int] = Field(default_factory=list)  # 空 = 群内任何人都可用修改类命令
     commands: bool = True
     feedback_buttons: bool = True
     silent_extension_replies: bool = False
     api_base: str = "https://api.telegram.org"
     send_timeout_s: float = 10.0
+    route: RouteCfg = Field(default_factory=RouteCfg)
+
+    @model_validator(mode="after")
+    def _need_chat(self) -> "TelegramCfg":
+        if self.enabled and str(self.chat_id).strip() in ("", "0"):
+            raise ValueError("启用 Telegram 时要填 chat_id（群组 ID）")
+        return self
+
+
+class DiscordCfg(_M):
+    enabled: bool = False
+    channel_id: str = ""  # 频道 ID：Discord 设置里打开开发者模式，右键频道“复制频道 ID”
+    admin_user_ids: list[int] = Field(default_factory=list)  # 空 = 频道里任何人都可用 /mute
+    commands: bool = True  # 注册斜杠命令 /status /mute 等
+    feedback_buttons: bool = True
+    api_base: str = "https://discord.com/api/v10"
+    send_timeout_s: float = 10.0
+    route: RouteCfg = Field(default_factory=RouteCfg)
+
+    @field_validator("channel_id", mode="before")
+    @classmethod
+    def _as_str(cls, v: object) -> str:
+        return str(v).strip()
+
+    @model_validator(mode="after")
+    def _need_channel(self) -> "DiscordCfg":
+        if self.enabled and not self.channel_id.isdigit():
+            raise ValueError("启用 Discord 时要填 channel_id（一串数字）")
+        return self
+
+
+class TradingViewCfg(_M):
+    """接收 TradingView 告警 webhook，按同样的模板转发到各推送渠道。webhook 地址里的密钥写在 secrets.env。"""
+
+    enabled: bool = False
+    max_per_min: int = Field(20, ge=1, le=600)  # 每分钟最多转发多少条，超出的丢弃并记日志
+    dedup_s: int = Field(60, ge=0)  # 同样内容在这段时间内只转发一次
+
+
+class WebCfg(_M):
+    """网页管理后台（单独的 market-monitor-web 服务）。"""
+
+    listen_host: str = "127.0.0.1"  # 只听本机，由 Caddy 反向代理出 HTTPS
+    listen_port: int = Field(8787, ge=1, le=65535)
+    session_hours: float = Field(12, gt=0, le=168)
+    cookie_secure: bool = True  # 只通过 HTTPS（或本机 SSH 隧道）访问时保持 true
+    login_max_failures: int = Field(5, ge=1)
+    login_lock_min: int = Field(15, ge=1)
 
 
 class SessionOverride(_M):
@@ -258,7 +332,7 @@ class WeekendPerpCfg(_M):
 
 class AppConfig(_M):
     general: GeneralCfg = Field(default_factory=GeneralCfg)
-    telegram: TelegramCfg
+    telegram: TelegramCfg = Field(default_factory=TelegramCfg)
     rules: RulesCfg = Field(default_factory=RulesCfg)
     episode: EpisodeCfg = Field(default_factory=EpisodeCfg)
     merge: MergeCfg = Field(default_factory=MergeCfg)
@@ -268,9 +342,14 @@ class AppConfig(_M):
     calendar: CalendarCfg = Field(default_factory=CalendarCfg)
     storage: StorageCfg = Field(default_factory=StorageCfg)
     weekend_perp: WeekendPerpCfg = Field(default_factory=WeekendPerpCfg)
+    discord: DiscordCfg = Field(default_factory=DiscordCfg)
+    tradingview: TradingViewCfg = Field(default_factory=TradingViewCfg)
+    web: WebCfg = Field(default_factory=WebCfg)
 
     @model_validator(mode="after")
     def _check(self) -> "AppConfig":
+        if not (self.telegram.enabled or self.discord.enabled):
+            raise ValueError("Telegram 和 Discord 至少启用一个推送渠道")
         if self.weekend_perp.enabled:
             raise ValueError("周末合约模块在本版本未实现，请保持 weekend_perp.enabled = false")
         if not (self.stocks.enabled or self.crypto.enabled):
@@ -380,20 +459,36 @@ class Params:
 class Secrets:
     telegram_token: str | None
     heartbeat_url: str | None
+    discord_token: str | None = None
+    tradingview_secret: str | None = None
 
     @classmethod
     def from_env(cls) -> "Secrets":
         return cls(
             telegram_token=os.environ.get("TELEGRAM_BOT_TOKEN") or None,
             heartbeat_url=os.environ.get("HEARTBEAT_URL") or None,
+            discord_token=os.environ.get("DISCORD_BOT_TOKEN") or None,
+            tradingview_secret=os.environ.get("TRADINGVIEW_WEBHOOK_SECRET") or None,
         )
 
 
 SECRET_ENV_VARS = (
     "TELEGRAM_BOT_TOKEN",
+    "DISCORD_BOT_TOKEN",
+    "TRADINGVIEW_WEBHOOK_SECRET",
     "HEARTBEAT_URL",
     "LONGBRIDGE_APP_KEY",
     "LONGBRIDGE_APP_SECRET",
     "LONGBRIDGE_ACCESS_TOKEN",
     "LONGBRIDGE_OAUTH_CLIENT_ID",
 )
+
+
+def channel_routes(cfg: "AppConfig") -> dict:
+    """启用的推送渠道及订阅规则，给发件箱分发用。"""
+    routes = {}
+    if cfg.telegram.enabled:
+        routes["telegram"] = cfg.telegram.route.to_route()
+    if cfg.discord.enabled:
+        routes["discord"] = cfg.discord.route.to_route()
+    return routes
