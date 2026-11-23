@@ -5,7 +5,7 @@ from market_monitor_v3.config import AppConfig, Params
 from tests.helpers import make_cfg
 
 
-def test_sensitive_preset_has_louis_decisions():
+def test_sensitive_preset_values():
     p = Params(make_cfg())
     assert p.preset == "sensitive" and p.label == "灵敏"
     assert p.sessions["REG"].z == 5 and p.sessions["PRE"].z == 6 and p.sessions["ON"].z == 6

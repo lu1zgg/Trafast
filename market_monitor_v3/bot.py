@@ -92,7 +92,7 @@ class BotPoller:
                     log.warning("getUpdates 冲突（409）：该 bot 设置了 webhook 或有另一个程序在轮询")
                     await self._ops(
                         "bot-conflict",
-                        "⚙️ 运维：收不到命令。这个 bot 设置了 webhook，或者另一个程序（例如旧版 V2）正在用同一个 bot 轮询。"
+                        "⚙️ 运维：收不到命令。这个 bot 设置了 webhook，或者另一个程序正在用同一个 bot 轮询。"
                         "停掉另一个程序，或执行 deleteWebhook 后会自动恢复。",
                     )
                 wait = 60.0 if res.code == 409 else backoff

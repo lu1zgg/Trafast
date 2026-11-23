@@ -114,4 +114,4 @@ backup_keep = 7
 maintenance_time = "12:30"      # 北京时间，夜盘清淡时段
 
 [weekend_perp]
-enabled = false                 # 周末合约模块：louis 决定不开，本版本未实现
+enabled = false                 # 周末合约模块：本版本未实现

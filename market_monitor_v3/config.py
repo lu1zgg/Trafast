@@ -41,7 +41,7 @@ STOCK_FLOORS_PCT: dict[str, Triple] = {
 }
 CRYPTO_FLOORS_PCT: Triple = (0.5, 1.0, 1.5)
 
-# 三档预设。灵敏档已包含 louis 2026-11-23 的决定：盘前、盘后、夜盘 15 分钟直通线 2.5%。
+# 三档预设。灵敏档：盘前、盘后、夜盘 15 分钟直通线 2.5%。
 PRESETS: dict[str, dict] = {
     "sensitive": {
         "label": "灵敏",
@@ -253,7 +253,7 @@ class StorageCfg(_M):
 
 
 class WeekendPerpCfg(_M):
-    enabled: bool = False  # louis 决定关闭；本版本未实现该模块
+    enabled: bool = False  # 本版本未实现该模块
 
 
 class AppConfig(_M):
