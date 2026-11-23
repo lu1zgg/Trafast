@@ -104,15 +104,40 @@ journalctl -u market-monitor -f
 
 ## 接通长桥（美股）
 
-1. 在长桥开放平台拿到 App Key、App Secret、Access Token，填进 `secrets.env`：
+1. 准备：长桥账户（在长桥 App 开户），并且有美股行情权限。开放平台里显示为 US LV1（仅 OpenAPI），夜盘行情包含在内。
+   在 [开放平台](https://open.longbridge.com/) 登录后看「行情权限」；没有的话在长桥 App「我的 → 我的行情 → 商店」开通（英文界面是 Me → My Quotes → Store）。
+
+   凭据二选一。
+
+   **方式 A：OAuth（长桥推荐，token 自动续期，适合长期跑在服务器上）**
+
+   ① 注册一个 OAuth 客户端，拿到 `client_id`。只做一次，在 VPS 或任何能上网的电脑上执行：
+   ```bash
+   curl -s -X POST https://openapi.longbridge.com/oauth2/register \
+     -H 'Content-Type: application/json' \
+     -d '{"client_name":"trafast-monitor","redirect_uris":["http://localhost:60355/callback"],"grant_types":["authorization_code","refresh_token"],"response_types":["code"],"token_endpoint_auth_method":"none"}'
+   ```
+   返回结果里的 `client_id` 填进 `secrets.env`：`LONGBRIDGE_OAUTH_CLIENT_ID="…"`。
+   `config.toml` 的 `[stocks.longbridge]` 改成 `auth = "oauth"`，`oauth_callback_port` 不用写（默认 60355，要和上面注册的回调地址一致）。
+
+   ② 授权。在你自己的电脑上开一个带端口转发的 SSH 连接：
+   ```bash
+   ssh -L 60355:127.0.0.1:60355 root@你的VPS
+   ```
+   在这个 SSH 窗口里执行 `sudo mm lb-login`，它会打印一个 `https://openapi.longbridge.com/oauth2/authorize?...` 开头的链接。
+   这个链接每次都是现生成的（带一次性校验参数），所以没有固定的授权地址。
+   把链接复制到你电脑的浏览器打开，登录长桥并同意授权。浏览器会跳回 `localhost:60355`，经端口转发回到 VPS，终端显示「授权完成」。
+   token 存在 `/var/lib/market-monitor/.longbridge/openapi/tokens/`，服务会自动续期。以后如果日志提示重新授权，重复第 ② 步。
+
+   **方式 B：API Key（旧方式，最简单，但 90 天要换一次）**
+
+   在 [开放平台](https://open.longbridge.com/) 登录后进「用户中心」，复制 App Key、App Secret、Access Token，填进 `secrets.env`：
    ```
    LONGBRIDGE_APP_KEY="…"
    LONGBRIDGE_APP_SECRET="…"
    LONGBRIDGE_ACCESS_TOKEN="…"
    ```
-   账号要有美股行情权限，夜盘需要单独的夜盘行情权限。
-   Access Token 有到期日，把日期填进 `config.toml` 的 `[health] longbridge_token_expires = 2027-02-20`，到期前 7 天群里会提醒。
-   （也可以用 OAuth：`auth = "oauth"`，填 `LONGBRIDGE_OAUTH_CLIENT_ID`，在 `[stocks.longbridge]` 里加 `oauth_callback_port = 8765`，本机执行 `ssh -L 8765:127.0.0.1:8765 root@你的VPS`，再在 VPS 上 `sudo mm lb-login`，把打印的链接在本机浏览器打开。）
+   Access Token 默认 90 天过期。把到期日填进 `config.toml` 的 `[health] longbridge_token_expires = 2027-02-20`，到期前 7 天群里会提醒。
 2. 逐项核对，**最好在美股交易时段（含盘前、盘后或夜盘）跑**：
    ```bash
    sudo mm lb-check --symbol NVDA.US
