@@ -1,0 +1,117 @@
+# 异动监控 V3 配置。复制到 /etc/market-monitor/config.toml 后修改。
+# 密钥（Telegram token、长桥凭据、心跳地址）不要写在这里，写在 /etc/market-monitor/secrets.env。
+# 改完执行 `sudo mm check-config` 校验，然后 `sudo systemctl reload market-monitor` 热加载
+# （规则参数、静音等可以热加载；标的、群组、市场开关的变化需要 restart）。
+
+[general]
+state_dir = "/var/lib/market-monitor"   # 数据库、备份、锁文件
+display_tz = "Asia/Shanghai"
+log_level = "INFO"
+
+[telegram]
+chat_id = -1001234567890        # 群组 ID（负数）。告警、运维消息、日报都发这个群
+admin_user_ids = []             # 留空 = 群里任何人都能用 /mute /unmute；填 Telegram 用户 ID 则只有这些人能用
+commands = true                 # 接收 /status /mute 等命令
+feedback_buttons = true         # 告警下面的 👍/👎 按钮
+silent_extension_replies = false
+
+[rules]
+preset = "sensitive"            # sensitive 灵敏 / balanced 均衡 / conservative 克制
+confirm_ratio = 0.6             # 下一根 K 线仍保留 60% 以上才推送
+fast_score = 2.0                # 得分 ≥ 2 直接推（L3）
+l2_score = 1.5
+l2_turnover_mult = 3.0
+thin_turnover_frac = 0.25       # 夜盘和早盘前：窗口成交额不低于该时段中位数的 25%
+thin_pre_until = "07:00"        # 美东时间
+baseline_sessions = 20
+baseline_min_sessions = 5
+crypto_baseline_days = 14
+crypto_min_days = 2
+
+# 按时段微调（一般不用动）。百分比写法，例如：
+# [rules.overrides.REG]
+# z = 5.5
+# [rules.overrides.ON]
+# floor_pct = [0.8, 1.5, 2.2]
+# bypass_pct = [1.5, 2.5, 2.5]
+
+[episode]
+extend_floors = 1.0             # 同方向再走 1 个 5 分钟地板算延伸，回复在原消息下
+end_retrace = 0.5               # 回撤超过最大位移一半即结束
+idle_end_min = 30
+cooldown_min = 10
+max_replies = 3
+reply_gap_min = 5
+
+[merge]
+window_s = 180                  # 同市场同方向 3 分钟内合并成一条联动消息
+batch_delay_s = 8
+fast_batch_delay_s = 2
+max_new_per_min = 6
+expiry_s = 600                  # K 线收盘 10 分钟后还没发出去的告警直接丢弃
+
+[stocks]
+# 长桥接通前先保持 false，只跑加密货币；接通步骤见 README「接通长桥（美股）」。
+enabled = false
+symbols = ["NVDA.US", "GOOGL.US", "MU.US", "SNDK.US", "META.US", "STX.US", "INTC.US", "BE.US", "TSLA.US", "SPCX.US"]
+overnight = true
+synthesize_missing = true       # 交易时段某分钟没成交，补一根平 K 线
+grace_s = 6
+bar_source = "candles"          # candles：长桥 K 线推送；trades：用逐笔成交自己合成
+
+[stocks.multipliers]            # 按标的放大地板，键要带引号，例如 "BE.US" = 1.3
+# "BE.US" = 1.3
+
+[stocks.longbridge]
+auth = "apikey"                 # apikey 或 oauth
+ts_is_close = false             # 接通后用 sudo mm lb-check 核对
+naive_tz = "UTC"
+subscribe_quotes = true
+check_overnight_list = true
+refresh_calendar = true
+warmup_days = 35
+history_pause_s = 0.6
+
+[crypto]
+enabled = true
+symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+ws_url = "wss://stream.binance.com:9443"
+rest_url = "https://api.binance.com"
+rotate_hours = 23
+grace_s = 5
+
+[crypto.multipliers]
+ETHUSDT = 1.2
+SOLUSDT = 1.4
+
+[health]
+daily_report_time = "09:05"     # 北京时间
+report_tz = "Asia/Shanghai"
+lb_stale_reg_s = 60
+lb_stale_other_s = 300
+binance_stale_s = 30
+stale_alert_after_s = 180       # 断流 3 分钟还没恢复才发运维消息
+outbox_backlog_n = 20
+outbox_backlog_age_s = 120
+loop_lag_s = 1.0
+clock_check_minutes = 60
+clock_max_offset_s = 1.0
+heartbeat_interval_s = 60
+# longbridge_token_expires = 2027-02-20   # 用 App Key + Access Token 时填 token 到期日，提前 7 天提醒
+token_warn_days = 7
+startup_message = true
+
+[calendar]
+extra_holidays = []             # 内置 2026–2027 NYSE 休市日；接通长桥后每天按交易所刷新
+extra_early_closes = []
+
+[storage]
+db_file = "monitor.db"
+bars_days = 120
+l0_days = 90
+outbox_days = 30
+backup_keep = 7
+maintenance_time = "12:30"      # 北京时间，夜盘清淡时段
+
+[weekend_perp]
+enabled = false                 # 周末合约模块：louis 决定不开，本版本未实现

@@ -1,0 +1,18 @@
+#!/bin/sh
+# 运维命令包装：以 monitor 用户、带上 secrets.env 运行 monitor 子命令。
+# 用法：sudo mm status | sudo mm test-telegram | sudo mm replay --days 7 | sudo mm lb-check …
+set -e
+if [ "$(id -u)" != 0 ]; then
+    echo "请用 sudo 运行：sudo mm $*" >&2
+    exit 1
+fi
+set -a
+. /etc/market-monitor/secrets.env
+set +a
+export MONITOR_CONFIG=/etc/market-monitor/config.toml
+cd /var/lib/market-monitor
+if [ "$1" = "status" ]; then
+    shift
+    set -- ctl status "$@"
+fi
+exec runuser -u monitor -- /opt/market-monitor/.venv/bin/monitor "$@"

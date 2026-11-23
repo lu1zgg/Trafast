@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# 工具缓存
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+
+# 运行数据和密钥（绝不提交）
+*.db
+*.db-wal
+*.db-shm
+backups/
+secrets.env
+*.env
+!deploy/secrets.env.example
+config.toml
+!deploy/config.example.toml

@@ -1,0 +1,83 @@
+{
+ "rule_version": "v3.0-灵敏-6548a3f0",
+ "messages": [
+  {
+   "kind": "send",
+   "key": "g1776693840CuETH",
+   "parent": "",
+   "first_line": "▲ ETH +1.2%｜5 分钟｜L1 异动"
+  },
+  {
+   "kind": "edit",
+   "key": "g1776693840CuETH:e1",
+   "parent": "g1776693840CuETH",
+   "first_line": "▲ ETH +1.2%｜5 分钟｜L1 异动"
+  },
+  {
+   "kind": "send",
+   "key": "g1776736920CdBTC",
+   "parent": "",
+   "first_line": "▼ SOL -1.1%｜1 分钟｜L2 显著"
+  },
+  {
+   "kind": "edit",
+   "key": "g1776736920CdBTC:e1",
+   "parent": "g1776736920CdBTC",
+   "first_line": "▼ SOL -1.1%｜1 分钟｜L2 显著"
+  },
+  {
+   "kind": "edit",
+   "key": "g1776736920CdBTC:e2",
+   "parent": "g1776736920CdBTC",
+   "first_line": "▼ SOL -1.1%｜1 分钟｜L2 显著"
+  },
+  {
+   "kind": "edit",
+   "key": "g1776736920CdBTC:e3",
+   "parent": "g1776736920CdBTC",
+   "first_line": "▼ SOL -1.1%｜1 分钟｜L2 显著"
+  },
+  {
+   "kind": "send",
+   "key": "g1776781920UdNVDA",
+   "parent": "",
+   "first_line": "▼ NVDA -0.73%｜1 分钟｜L2 显著"
+  },
+  {
+   "kind": "reply",
+   "key": "NVDA-1776781860:r1",
+   "parent": "g1776781920UdNVDA",
+   "first_line": "↳ 延伸：NVDA -2.2%（3 分钟），升级 L3 剧烈"
+  },
+  {
+   "kind": "reply",
+   "key": "NVDA-1776781860:r2",
+   "parent": "g1776781920UdNVDA",
+   "first_line": "↳ 延伸：NVDA -3.5%（8 分钟）"
+  },
+  {
+   "kind": "edit",
+   "key": "g1776781920UdNVDA:e1",
+   "parent": "g1776781920UdNVDA",
+   "first_line": "▼ NVDA -0.73%｜1 分钟｜L2 显著"
+  },
+  {
+   "kind": "send",
+   "key": "g1776857520UuNVDA",
+   "parent": "",
+   "first_line": "▲ NVDA +0.87%｜1 分钟｜L2 显著"
+  },
+  {
+   "kind": "reply",
+   "key": "NVDA-1776857460:r1",
+   "parent": "g1776857520UuNVDA",
+   "first_line": "↳ 延伸：NVDA +3.2%（72 分钟）"
+  },
+  {
+   "kind": "edit",
+   "key": "g1776857520UuNVDA:e1",
+   "parent": "g1776857520UuNVDA",
+   "first_line": "▲ NVDA +0.87%｜1 分钟｜L2 显著"
+  }
+ ]
+}

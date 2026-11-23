@@ -1,0 +1,44 @@
+# systemd 单元。install.sh 会把 /opt/market-monitor 换成仓库实际路径后装到 /etc/systemd/system/。
+[Unit]
+Description=Market monitor V3 (US stocks + crypto anomaly alerts)
+After=network-online.target time-sync.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+NotifyAccess=main
+User=monitor
+Group=monitor
+EnvironmentFile=/etc/market-monitor/secrets.env
+Environment=HOME=/var/lib/market-monitor
+Environment=PYTHONUNBUFFERED=1
+WorkingDirectory=/var/lib/market-monitor
+ExecStart=/opt/market-monitor/.venv/bin/monitor run --config /etc/market-monitor/config.toml
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=10
+# 首次启动要从 Binance 拉 14 天 K 线做基线，给足时间
+TimeoutStartSec=600
+TimeoutStopSec=30
+WatchdogSec=60
+StateDirectory=market-monitor
+StateDirectoryMode=0750
+
+# 加固：只读系统、只能写状态目录、不开任何监听端口
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryMax=1G
+
+[Install]
+WantedBy=multi-user.target
