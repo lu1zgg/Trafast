@@ -56,7 +56,7 @@ cat /root/.ssh/trafast_deploy.pub
 
 ```bash
 GIT_SSH_COMMAND="ssh -i /root/.ssh/trafast_deploy -o IdentitiesOnly=yes" \
-  git clone git@github.com:louisg729-lgtm/Trafast.git /opt/market-monitor
+  git clone git@github.com:lu1zgg/Trafast.git /opt/market-monitor
 git -C /opt/market-monitor config core.sshCommand "ssh -i /root/.ssh/trafast_deploy -o IdentitiesOnly=yes"
 ```
 
