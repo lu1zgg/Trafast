@@ -507,3 +507,52 @@ def test_same_origin_post_and_null_origin_accepted(env):
     assert r.status_code == 303
     assert len(env["mon"].cmds("mute")) == 2
     assert c.get("/").headers["Referrer-Policy"] == "same-origin"
+
+
+# ---- 趋势 ----
+def _trend_form(csrf: str, **over) -> dict:
+    form = {
+        "csrf": csrf, "enabled": "on", "sym_NVDA.US": "on", "sym_AAPL.US": "on", "sym_BTCUSDT": "on",
+        "accept_bars": "4", "min_4h_score": "1", "cooldown_h": "4", "hard_risk_atr4h": "2.5",
+        "max_risk_atr4h": "1.8", "max_ext_atr1h": "2.5", "climax_mult": "2.5",
+        "sr_tol_atr": "0.4", "sr_half_life_d": "15", "sr_vp_days": "10", "sr_show": "2",
+        "zigzag_atr": "1.5", "adx_min": "20", "history_days": "130",
+    }
+    form.update(over)
+    return {k: v for k, v in form.items() if v is not None}
+
+
+def test_trend_page_shows_status_and_saves(env, monkeypatch):
+    now = time.time()
+    brief = {"s": 1, "e": 1, "a": 1, "sc": 3, "adx": 31.0, "label": "上涨结构（低点抬高）"}
+    item = {
+        "symbol": "NVDA.US", "name": "NVDA", "seeded": True, "ready": True, "price": 172.4, "t": now,
+        "s15": brief, "s1": brief, "s4": {},
+        "active": {"d": 1, "entry_t": now - 3600, "entry_price": 170.0, "stop": 167.8, "quiet": ""},
+        "bars": {"15m": 2000, "1h": 800, "4h": 400},
+        "res": [{"lo": 177.8, "hi": 182.0, "stars": "★★", "src": "4h+1h", "strong": True}], "sup": [],
+    }
+    event = {"ts": now - 3600, "symbol": "NVDA.US", "kind": "formed", "d": 1, "price": 170.0,
+             "data": {"grade": "B", "stop": 167.8, "quiet": ""}}
+    orig = webapp.control_call
+
+    async def mon(path, cmd, timeout=15, **args):
+        if cmd == "trend":
+            return {"ok": True, "enabled": True, "items": [item], "events": [event]}
+        return await orig(path, cmd, timeout, **args)
+
+    monkeypatch.setattr(webapp, "control_call", mon)
+    csrf = login(env)
+    page = env["client"].get("/trend")
+    assert page.status_code == 200
+    assert "上涨趋势" in page.text and "$167.80" in page.text and "★★" in page.text and "趋势形成" in page.text
+    env["client"].post("/trend", data=_trend_form(csrf, **{"sym_BTCUSDT": None, "accept_bars": "6"}))
+    cfg = load_config(env["paths"].config)
+    assert cfg.trend.accept_bars == 6 and cfg.trend.disabled_symbols == ["BTCUSDT"]
+    assert "# 测试配置" in env["paths"].config.read_text()
+
+
+def test_channel_route_trend_checkbox(env):
+    login(env)
+    page = env["client"].get("/channels").text
+    assert "趋势形成 / 结束" in page and '_trend"' in page

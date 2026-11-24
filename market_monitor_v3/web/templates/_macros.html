@@ -58,6 +58,7 @@
   </div>
   <div class="checks">
     {{ check(prefix ~ "_tradingview", r.tradingview, "TradingView 告警") }}
+    {{ check(prefix ~ "_trend", r.trend, "趋势形成 / 结束") }}
     {{ check(prefix ~ "_ops", r.ops, "运维消息（掉线、恢复、后台登录）") }}
     {{ check(prefix ~ "_reports", r.reports, "每日日报") }}
   </div>

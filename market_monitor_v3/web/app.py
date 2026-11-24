@@ -46,6 +46,7 @@ NAV = [
     ("/", "概览"),
     ("/symbols", "标的"),
     ("/rules", "规则"),
+    ("/trend", "趋势"),
     ("/channels", "推送渠道"),
     ("/tradingview", "TradingView"),
     ("/system", "系统"),
@@ -574,6 +575,37 @@ def create_app(paths: WebPaths, control_socket: str | None = None, fail_delay_s:
         await apply(s, request, form, mutate, "规则")
         return RedirectResponse("/rules", status_code=303)
 
+    # ---- 趋势 ----
+    TREND_NUMS = (
+        ("accept_bars", int), ("min_4h_score", int), ("cooldown_h", float), ("hard_risk_atr4h", float),
+        ("max_risk_atr4h", float), ("max_ext_atr1h", float), ("climax_mult", float),
+        ("sr_tol_atr", float), ("sr_half_life_d", float), ("sr_vp_days", float), ("sr_show", int),
+        ("zigzag_atr", float), ("adx_min", float), ("history_days", int),
+    )
+
+    @app.get("/trend", response_class=HTMLResponse)
+    async def trend_page(request: Request) -> Response:
+        s = need_login(request)
+        text, _, cfg = load()
+        st = await monitor("trend")
+        return page(request, s, "trend.html", cfg=cfg, rev=digest(text), st=st, all_symbols=cfg.all_symbols())
+
+    @app.post("/trend")
+    async def trend_save(request: Request) -> Response:
+        s = need_login(request)
+        form = await form_checked(request, s)
+        _, _, cfg = load()
+
+        def mutate(doc: Any) -> None:
+            t = _tbl(doc, "trend")
+            t["enabled"] = _bool(form, "enabled")
+            t["disabled_symbols"] = [x for x in cfg.all_symbols() if not _bool(form, f"sym_{x}")]
+            for name, cast in TREND_NUMS:
+                t[name] = _num(form, name, cast)
+
+        await apply(s, request, form, mutate, "趋势监控")
+        return RedirectResponse("/trend", status_code=303)
+
     # ---- 推送渠道 ----
     def _route_form(t: Table, form: Any, prefix: str) -> None:
         """就地改 [xxx.route]，保留原有注释。"""
@@ -583,6 +615,7 @@ def create_app(paths: WebPaths, control_socket: str | None = None, fail_delay_s:
         markets = [m for m in ("US", "CRYPTO") if _bool(form, f"{prefix}_m_{m}")]
         t["markets"] = markets
         t["tradingview"] = _bool(form, f"{prefix}_tradingview")
+        t["trend"] = _bool(form, f"{prefix}_trend")
         t["ops"] = _bool(form, f"{prefix}_ops")
         t["reports"] = _bool(form, f"{prefix}_reports")
 

@@ -62,12 +62,15 @@ class Route:
     tradingview: bool = True
     ops: bool = True
     reports: bool = True
+    trend: bool = True
 
     def accepts(self, kind: str, key: str, level: str | None, market: str | None) -> bool:
         if kind == "ops":
             return self.reports if key.startswith("report:") else self.ops
         if kind != "send":
             return True  # 回复、编辑跟随原消息，由发件箱判断
+        if key.startswith("trend"):
+            return self.trend and (not market or market in self.markets)
         if market == "TV":
             return self.tradingview
         if not self.alerts:

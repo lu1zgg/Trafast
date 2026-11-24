@@ -175,6 +175,72 @@ def cmd_backfill_crypto(args: argparse.Namespace) -> int:
     return asyncio.run(main())
 
 
+def cmd_trend_backtest(args: argparse.Namespace) -> int:
+    """用库里的 15m K 线（服务运行时自动补齐）回测趋势规则；--fetch 先从 Binance 补加密货币。"""
+    from .app import make_calendar
+    from .models import market_of
+    from .store import Store
+    from .trend.backtest import report, run_symbol
+    from .trend.buckets import UsRegularBucketer, UtcBucketer
+    from .trend.series import Candle
+
+    cfg = _cfg(args)
+    syms = [s.upper() for s in args.symbols] if args.symbols else cfg.trend.symbols(cfg) or cfg.all_symbols()
+    now = int(time.time())
+    since = now - args.days * 86400
+
+    async def main() -> int:
+        store = Store(cfg.db_path)
+        await store.open()
+        try:
+            if args.fetch:
+                from .feeds.binance_spot import BinanceSpotFeed
+
+                feed = BinanceSpotFeed(cfg.crypto, lambda b: None, lambda n, t: None)
+                try:
+                    for sym in [s for s in syms if market_of(s) == "CRYPTO"]:
+                        rows = await feed.fetch_rows(sym, "15m", since, now - now % 900)
+                        items = [
+                            (sym, Candle(int(r[0]) // 1000, int(r[0]) // 1000 + 900, *(float(r[k]) for k in (1, 2, 3, 4, 7))))
+                            for r in rows
+                        ]
+                        await store.call(Store.insert_trend_bars, items)
+                        print(f"{display_name(sym)}：从 Binance 补 {len(items)} 根 15m")
+                finally:
+                    await feed.http.aclose()
+            data = {s: [Candle.from_row(r) for r in await store.call(Store.load_trend_bars, s, since)] for s in syms}
+        finally:
+            await store.close()
+        cal = make_calendar(cfg)
+        us, utc = UsRegularBucketer(cal), UtcBucketer()
+        p = cfg.trend.params()
+        runs = []
+        for sym, candles in data.items():
+            if len(candles) < 400:
+                print(f"{display_name(sym)}：15m 只有 {len(candles)} 根，跳过")
+                continue
+            r = run_symbol(sym, candles, us if market_of(sym) == "US" else utc, p, include_quiet=args.include_quiet)
+            runs.append(r)
+            print(f"{display_name(sym):<6} 15m {len(candles):>6} 根  信号 {len(r.trades):>3}")
+        if not runs:
+            print("没有足够的数据。服务运行时会自动补 15m 历史；加密货币也可以加 --fetch 直接从 Binance 拉。")
+            return 1
+        rep = report(runs)
+        print()
+        for key, label in (("signals", "推送的信号"), ("random", "随机入场对照"), ("up", "上涨"), ("down", "下跌"), ("grade_A", "A 级"), ("grade_B", "B 级")):
+            print(f"{label:<10} {rep[key].line()}")
+        print("每个标的每周信号数：" + "，".join(f"{display_name(k)} {v:.1f}" for k, v in rep["per_symbol_week"].items()))
+        if args.show:
+            print()
+            for r in runs:
+                for t in r.trades:
+                    when = datetime.fromtimestamp(t.t, UTC).strftime("%Y-%m-%d %H:%M")
+                    print(f"{when} UTC {display_name(t.symbol):<6} {'涨' if t.d > 0 else '跌'} {t.price:>10.2f} 失效位 {t.stop0:>10.2f}  {t.exit_r:+.2f}R  {t.why}")
+        return 0
+
+    return asyncio.run(main())
+
+
 def cmd_import_csv(args: argparse.Namespace) -> int:
     from .store import Store
 
@@ -504,6 +570,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-v", "--verbose", action="store_true")
     p = add("backfill-crypto", cmd_backfill_crypto, "从 Binance REST 拉加密货币历史 K 线")
     p.add_argument("--days", type=int, default=14)
+    p = add("trend-backtest", cmd_trend_backtest, "用 15m 历史回测趋势规则，并和随机入场对照")
+    p.add_argument("symbols", nargs="*", help="不填 = 全部开启趋势监控的标的")
+    p.add_argument("--days", type=int, default=240)
+    p.add_argument("--fetch", action="store_true", help="先从 Binance 补加密货币的 15m 历史")
+    p.add_argument("--include-quiet", action="store_true", help="把追远、高潮量这些不推送的趋势也算进去")
+    p.add_argument("--show", action="store_true", help="列出每条信号")
     p = add("import-csv", cmd_import_csv, "导入 CSV K 线（symbol,ts,o,h,l,c,volume,turnover[,session]）")
     p.add_argument("files", nargs="+")
     p = add("ctl", cmd_ctl, "status / mute / unmute")

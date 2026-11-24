@@ -24,6 +24,7 @@ alerts = true                   # 异动告警
 min_level = "L1"                # L1 全部 / L2 及以上 / L3 只要剧烈
 markets = ["US", "CRYPTO"]
 tradingview = true              # TradingView 转发来的告警
+trend = true                    # 趋势形成 / 结束（按上面的 markets 过滤）
 ops = true                      # 运维消息（断流、恢复、后台登录）
 reports = true                  # 每日日报
 
@@ -39,6 +40,7 @@ alerts = true
 min_level = "L1"
 markets = ["US", "CRYPTO"]
 tradingview = true
+trend = true
 ops = true
 reports = true
 
@@ -142,6 +144,28 @@ heartbeat_interval_s = 60
 # longbridge_token_expires = 2027-02-20   # 用 App Key + Access Token 时填 token 到期日，提前 7 天提醒
 token_warn_days = 7
 startup_message = true
+
+[trend]                         # 15m / 1h / 4h 多周期趋势监控，只推“形成”和“结束”，附支撑压力位
+enabled = true
+disabled_symbols = []           # 这些标的不做趋势监控，例如 ["SPCX.US"]
+# 打分（改了会自动重启，按新参数重算历史）
+zigzag_atr = 1.5                # 收盘回撤超过几倍 ATR 才确认一个波段高低点
+adx_min = 20
+history_days = 130              # 启动时补多少天 15m 历史（加密从 Binance，美股从长桥）
+# 形成 / 结束（热加载）
+accept_bars = 4                 # 条件连续满足几根 15m 才算形成（4 根 = 站稳 1 小时）
+min_4h_score = 1
+cooldown_h = 4                  # 同方向趋势结束后几小时内不再判定形成
+hard_risk_atr4h = 2.5           # 失效位离现价超过几倍 4h ATR 就不算趋势
+# 推送过滤：不满足的照样跟踪到结束，但整段不推（热加载）
+max_risk_atr4h = 1.8
+max_ext_atr1h = 2.5             # 现价离 1h EMA20 超过几倍 1h ATR 算追远
+climax_mult = 2.5               # 最近 4 小时成交额是常态中位数的几倍算高潮量
+# 支撑压力位（热加载）
+sr_tol_atr = 0.4
+sr_half_life_d = 15
+sr_vp_days = 10
+sr_show = 2                     # 推送里上下各列几个强位
 
 [calendar]
 extra_holidays = []             # 内置 2026–2027 NYSE 休市日；接通长桥后每天按交易所刷新

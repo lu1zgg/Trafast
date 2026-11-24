@@ -32,6 +32,8 @@ from .store import Store, bar_from_row, connect
 from .telegram import TelegramClient
 from .tradingview import Throttle
 from .tradingview import card_text as tv_card_text
+from .trend.engine import TrendEngine
+from .trend.series import Candle
 
 log = logging.getLogger("market_monitor_v3")
 BJ = ZoneInfo("Asia/Shanghai")
@@ -143,6 +145,7 @@ class Runtime:
         self.dropped_bars = 0
         self.health: Health | None = None
         self.engine: Engine | None = None
+        self.trend: TrendEngine | None = None
         self.senders: dict[str, OutboxSender] = {}
         self.channel_ok: dict[str, bool] = {}
         self.tg: TelegramClient | None = None
@@ -227,6 +230,17 @@ class Runtime:
             )
 
         self.engine = Engine(cfg, self.params, self.cal, self.baselines, self.sink, alive=self.health.is_alive)
+        trend_syms = cfg.trend.symbols(cfg)
+        if trend_syms:
+            self.trend = TrendEngine(
+                trend_syms,
+                self.cal,
+                cfg.trend.params(),
+                self.sink.out,
+                is_muted=self.engine.is_muted,
+                buttons=cfg.telegram.feedback_buttons or cfg.discord.feedback_buttons,
+                show=cfg.trend.sr_show,
+            )
         await self._restore()
 
         if self.binance is not None:
@@ -287,6 +301,10 @@ class Runtime:
             self.health.seen(name, now)
 
     async def flush(self) -> None:
+        if self.trend is not None:
+            teff = self.trend.drain()
+            if not teff.empty():
+                await self.store.call(Store.apply_trend, teff)
         eff = self.sink.drain()
         if eff.empty():
             return
@@ -335,6 +353,11 @@ class Runtime:
                 self.engine.on_bar(bar, self.clock())
             except Exception:
                 log.exception("处理 K 线出错：%s %s", bar.symbol, bar.ts)
+            if self.trend is not None:
+                try:
+                    self.trend.on_bar(bar, self.clock())
+                except Exception:
+                    log.exception("趋势处理 K 线出错：%s %s", bar.symbol, bar.ts)
             self.core_progress = self.clock()
             await self.flush()
 
@@ -427,6 +450,77 @@ class Runtime:
         except Exception as e:  # noqa: BLE001
             log.warning("长桥预热失败：%s %s", type(e).__name__, str(e)[:200])
         await self.recompute_baselines(self.cfg.stocks.symbols)
+        await self.trend_bootstrap("US")
+
+    # ---- 趋势监控 ----
+    async def trend_bootstrap(self, market: str) -> None:
+        """补齐 15m 历史（库里没有的从交易所拉），静默回放重建状态，再开始实时判断。"""
+        if self.trend is None:
+            return
+        now = int(self.clock())
+        since = now - self.cfg.trend.history_days * 86400
+        saved = await self.store.call(Store.trend_states)
+        for sym in [s for s in self.trend.machines if market_of(s) == market]:
+            try:
+                await self._trend_seed_symbol(sym, since, now, saved.get(sym))
+            except Exception:
+                log.exception("趋势预热失败：%s", sym)
+                # 失败也要开始实时处理，否则这个标的一直在缓存
+                if sym not in self.trend.seeded:
+                    self.trend.seed(sym, [], [], saved.get(sym), self.clock())
+            await self.flush()
+            await asyncio.sleep(0)
+
+    async def _trend_seed_symbol(self, sym: str, since: int, now: int, saved: dict[str, Any] | None) -> None:
+        assert self.trend is not None
+        rows = await self.store.call(Store.load_trend_bars, sym, since)
+        fetched: list[tuple[str, Candle]] = []
+        first = rows[0][0] if rows else None
+        last_end = rows[-1][1] if rows else None
+        end15 = now - now % 900
+        bk = self.trend.bucketer(sym)
+        if market_of(sym) == "CRYPTO" and self.binance is not None:
+            gaps = []
+            if first is None or first > since + 86400:
+                gaps.append((since, first if first is not None else end15))
+            if last_end is not None and last_end < end15:
+                gaps.append((last_end, end15))
+            for a, b in gaps:
+                for r in await self.binance.fetch_rows(sym, "15m", a, b):
+                    ts = int(r[0]) // 1000
+                    fetched.append((sym, Candle(ts, ts + 900, float(r[1]), float(r[2]), float(r[3]), float(r[4]), float(r[7]))))
+        elif market_of(sym) == "US" and self.lb is not None and (first is None or first > since + 3 * 86400):
+            try:
+                hist = await self.lb.history_15m(sym, since)
+            except Exception as e:  # noqa: BLE001
+                log.warning("长桥 15m 历史获取失败 %s：%s %s", sym, type(e).__name__, str(e)[:200])
+                hist = []
+            for ts, o, h, l, c, v in hist:
+                key = bk.key15(ts)
+                if key is not None and key[0] == ts and (first is None or ts < first):
+                    fetched.append((sym, Candle(ts, key[1], o, h, l, c, v)))
+        if fetched:
+            await self.store.call(Store.insert_trend_bars, fetched)
+            rows = await self.store.call(Store.load_trend_bars, sym, since)
+        candles = [Candle.from_row(r) for r in rows]
+        tail_from = candles[-1].end if candles else since
+        minutes = await self.store.call(Store.load_recent_bars, sym, tail_from)
+        n = self.trend.seed(sym, candles, minutes, saved, self.clock())
+        m = self.trend.machines[sym]
+        log.info(
+            "趋势预热 %s：15m %d 根（新拉 %d），1m 补 %d 根，%s",
+            display_name(sym), n, len(fetched), len(minutes), "可以判断" if m.ready else "数据还不够",
+        )
+
+    async def trend_text(self, args: list[str]) -> str:
+        if self.trend is None:
+            return "趋势监控没有启用（config.toml 的 [trend] enabled = false，或者没有标的）。"
+        if not args:
+            return self.trend.overview_text()
+        sym = self.resolve_symbol(args[0])
+        if sym is None or sym not in self.trend.machines:
+            return f"没找到标的 {html.escape(args[0])}，或者它没有开启趋势监控。"
+        return self.trend.detail_text(sym)
 
     async def send_report(self, now: float | None = None) -> None:
         now = now or self.clock()
@@ -536,6 +630,9 @@ class Runtime:
             out.append("数据源设置")
         if new.general != old.general or new.storage != old.storage or new.calendar != old.calendar:
             out.append("系统设置")
+        keys = {"enabled", "disabled_symbols", "zigzag_atr", "adx_min", "history_days"}
+        if new.trend.model_dump(include=keys) != old.trend.model_dump(include=keys):
+            out.append("趋势监控的标的或打分参数")
         return out
 
     async def reload(self, auto_restart: bool = False) -> dict[str, Any]:
@@ -554,6 +651,9 @@ class Runtime:
         self.engine.cfg = new
         self.engine.set_params(self.params)
         self.engine.merger.buttons = new.telegram.feedback_buttons or new.discord.feedback_buttons
+        if self.trend is not None:
+            self.trend.set_params(new.trend.params(), new.trend.sr_show)
+            self.trend.buttons = self.engine.merger.buttons
         self.health.cfg = new
         self.health.hc = new.health
         # 订阅规则（每个渠道收哪些消息）可以直接换
@@ -616,6 +716,11 @@ class Runtime:
             return {"ok": True}
         if cmd == "tv_alert":
             return await self.tradingview_alert(req.get("alert") or {})
+        if cmd == "trend":
+            if self.trend is None:
+                return {"ok": True, "enabled": False, "items": [], "events": []}
+            events = await self.store.call(Store.trend_events_recent, self.clock() - 14 * 86400, 40)
+            return {"ok": True, "enabled": True, "items": self.trend.status_json(), "events": events}
         if cmd == "ops":
             # 网页后台的安全提醒（登录、锁定）：发到运维消息
             assert self.health is not None
@@ -723,6 +828,11 @@ class Runtime:
         if self.lb is not None:
             coros.append(self.lb.run(self.stop))
             coros.append(self.lb_bootstrap())
+        if self.trend is not None:
+            # 加密的趋势预热在后台补数据，不挡启动；美股在长桥预热之后做（没有长桥就只用库里的数据）
+            coros.append(self.trend_bootstrap("CRYPTO"))
+            if self.lb is None:
+                coros.append(self.trend_bootstrap("US"))
         self.tasks = [asyncio.create_task(c) for c in coros]
 
         if self.cfg.health.startup_message:
