@@ -350,6 +350,43 @@ class LongbridgeFeed:
             log.info("长桥预热 %s：%d 页", sym, pages)
         return total
 
+    async def history_15m(self, symbol: str, since: int) -> list[tuple[int, float, float, float, float, float]]:
+        """趋势监控用：往回翻页取正常盘 15 分钟 K 线（ts 为开始时间），直到覆盖 since。
+
+        优先只取正常盘（TradeSessions.Intraday）；SDK 没有这个选项时取全部时段，由调用方按日历过滤。
+        """
+        sdk = self.sdk
+        if self.ctx is None:
+            self.loop = asyncio.get_running_loop()
+            self.ctx = sdk.AsyncQuoteContext.create(await self._build_config(), self.loop)
+        sessions = getattr(sdk.TradeSessions, "Intraday", None) or sdk.TradeSessions.All
+        out: dict[int, tuple[int, float, float, float, float, float]] = {}
+        cursor = int(self.clock())
+        pages = 0
+        while cursor > since and pages < 60:
+            pages += 1
+            rows = await self.ctx.history_candlesticks_by_offset(
+                symbol, sdk.Period.Min_15, sdk.AdjustType.NoAdjust, False, 1000, self._to_naive(cursor), sessions
+            )
+            got = []
+            for r in rows:
+                dt: datetime = r.timestamp
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=self._naive_tz)
+                ts = int(dt.timestamp())
+                if self.lb.ts_is_close:
+                    ts -= 900
+                ts -= ts % 60
+                if ts < cursor:
+                    got.append((ts, float(r.open), float(r.high), float(r.low), float(r.close), float(r.turnover)))
+            if not got:
+                break
+            for g in got:
+                out[g[0]] = g
+            cursor = min(g[0] for g in got)
+            await asyncio.sleep(self.lb.history_pause_s)
+        return [out[k] for k in sorted(out)]
+
     async def daily_checks(self, force: bool = False) -> None:
         today = datetime.fromtimestamp(self.clock(), ZoneInfo("America/New_York")).date()
         if not force and self._last_daily == today:

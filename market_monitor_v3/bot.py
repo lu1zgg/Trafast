@@ -26,8 +26,9 @@ HELP = """<b>可用命令</b>
 /mutes 当前静音列表
 /params 当前触发门槛
 /report 立即生成最近 24 小时日报
+/trend [代码] 趋势状态；带代码看详情和支撑压力位，例如 /trend NVDA
 /help 本说明
-告警消息下面的 👍/👎 用来标记这条有没有用，会进日报，帮助校准。"""
+告警和趋势消息下面的 👍/👎 用来标记这条有没有用，会进日报，帮助校准。"""
 
 _DUR = re.compile(r"^(\d+)\s*(m|min|h|d)?$", re.I)
 
@@ -52,6 +53,7 @@ class BotHooks(Protocol):
     async def mute(self, target: str, until: float, by: str) -> None: ...
     async def unmute(self, target: str | None) -> int: ...
     async def report_text(self) -> str: ...
+    async def trend_text(self, args: list[str]) -> str: ...
 
 
 async def run_command(
@@ -74,6 +76,8 @@ async def run_command(
         return hooks.mutes_text()
     if cmd == "report":
         return await hooks.report_text()
+    if cmd == "trend":
+        return await hooks.trend_text(args)
     if cmd in ("mute", "unmute"):
         if admins and user_id not in admins:
             return "没有权限：只有配置里的管理员可以静音或取消静音。"

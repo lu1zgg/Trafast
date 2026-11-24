@@ -94,6 +94,21 @@ CREATE INDEX IF NOT EXISTS events_ts ON events (ts);
 CREATE TABLE IF NOT EXISTS control (
     id INTEGER PRIMARY KEY, ts REAL NOT NULL, source TEXT, command TEXT, result TEXT
 );
+
+-- 趋势监控：15m K 线（美股只有正常盘）、每个标的的当前状态、形成/结束事件
+CREATE TABLE IF NOT EXISTS trend_bars (
+    symbol TEXT NOT NULL, ts INTEGER NOT NULL, end_ts INTEGER NOT NULL,
+    o REAL, h REAL, l REAL, c REAL, v REAL,
+    PRIMARY KEY (symbol, ts)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS trend_state (
+    symbol TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at REAL
+);
+CREATE TABLE IF NOT EXISTS trend_events (
+    id INTEGER PRIMARY KEY, ts INTEGER NOT NULL, symbol TEXT NOT NULL, kind TEXT NOT NULL,
+    d INTEGER, price REAL, data TEXT
+);
+CREATE INDEX IF NOT EXISTS trend_events_ts ON trend_events (ts);
 """
 
 # 后加的列：旧数据库打开时自动补上
@@ -453,6 +468,64 @@ class Store:
                 (root_key, user_id, value, time.time()),
             )
 
+    # ---- 趋势 ----
+    def apply_trend(self, eff: Any) -> None:
+        """eff 是 trend.engine.TrendEffects。"""
+        c = self.c
+        with c:
+            if eff.candles:
+                self._insert_trend_bars(eff.candles)
+            for sym, st in eff.states.items():
+                c.execute(
+                    "INSERT INTO trend_state (symbol, data, updated_at) VALUES (?,?,?) "
+                    "ON CONFLICT(symbol) DO UPDATE SET data=excluded.data, updated_at=excluded.updated_at",
+                    (sym, json.dumps(st, ensure_ascii=False), time.time()),
+                )
+            if eff.events:
+                c.executemany(
+                    "INSERT INTO trend_events (ts, symbol, kind, d, price, data) VALUES (?,?,?,?,?,?)",
+                    [(t, sym, kind, d, px, json.dumps(data, ensure_ascii=False)) for t, sym, kind, d, px, data in eff.events],
+                )
+
+    def _insert_trend_bars(self, items: Iterable[tuple[str, Any]]) -> None:
+        self.c.executemany(
+            "INSERT OR REPLACE INTO trend_bars (symbol, ts, end_ts, o, h, l, c, v) VALUES (?,?,?,?,?,?,?,?)",
+            [(sym, *k.to_row()) for sym, k in items],
+        )
+
+    def insert_trend_bars(self, items: list[tuple[str, Any]]) -> int:
+        with self.c:
+            self._insert_trend_bars(items)
+        return len(items)
+
+    def load_trend_bars(self, symbol: str, since_ts: int) -> list[tuple]:
+        rows = self.c.execute(
+            "SELECT ts, end_ts, o, h, l, c, v FROM trend_bars WHERE symbol=? AND ts>=? ORDER BY ts", (symbol, since_ts)
+        ).fetchall()
+        return [tuple(r) for r in rows]
+
+    def trend_states(self) -> dict[str, dict[str, Any]]:
+        out = {}
+        for r in self.c.execute("SELECT symbol, data FROM trend_state").fetchall():
+            try:
+                out[r["symbol"]] = json.loads(r["data"])
+            except ValueError:
+                continue
+        return out
+
+    def trend_events_recent(self, since: float, limit: int = 50) -> list[dict[str, Any]]:
+        rows = self.c.execute(
+            "SELECT ts, symbol, kind, d, price, data FROM trend_events WHERE ts>=? ORDER BY ts DESC LIMIT ?", (int(since), limit)
+        ).fetchall()
+        out = []
+        for r in rows:
+            try:
+                data = json.loads(r["data"] or "{}")
+            except ValueError:
+                data = {}
+            out.append({"ts": r["ts"], "symbol": r["symbol"], "kind": r["kind"], "d": r["d"], "price": r["price"], "data": data})
+        return out
+
     # ---- 基线 ----
     def save_baseline(self, symbol: str, stats: dict, when: int) -> None:
         with self.c:
@@ -482,6 +555,8 @@ class Store:
                 (now - 7 * 86400,),
             )
             c.execute("DELETE FROM baseline WHERE computed_at<?", (int(now - 180 * 86400),))
+            c.execute("DELETE FROM trend_bars WHERE ts<?", (int(now - 400 * 86400),))
+            c.execute("DELETE FROM trend_events WHERE ts<?", (int(now - 400 * 86400),))
         c.execute("PRAGMA optimize")
         c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         backup_dir.mkdir(parents=True, exist_ok=True)

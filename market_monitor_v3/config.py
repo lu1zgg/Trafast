@@ -115,6 +115,7 @@ class RouteCfg(_M):
     tradingview: bool = True  # TradingView 转发的告警
     ops: bool = True  # 运维消息
     reports: bool = True  # 日报
+    trend: bool = True  # 趋势形成 / 结束（也按 markets 筛选）
 
     def to_route(self):  # noqa: ANN201
         from .notifiers import Route
@@ -126,6 +127,7 @@ class RouteCfg(_M):
             tradingview=self.tradingview,
             ops=self.ops,
             reports=self.reports,
+            trend=self.trend,
         )
 
 
@@ -340,6 +342,63 @@ class StorageCfg(_M):
     _v_maint = field_validator("maintenance_time")(_check_hhmm)
 
 
+class TrendCfg(_M):
+    """多周期趋势监控（15m / 1h / 4h），规则见方案文档和 trend/machine.py。
+
+    美股只用正常盘 K 线判定，也只在正常盘推送；“4h”是每天两根（09:30–13:30、13:30–16:00）。
+    """
+
+    enabled: bool = True
+    disabled_symbols: list[str] = Field(default_factory=list)  # 这些标的不做趋势监控
+    # 单周期打分（改了要重启：历史要按新参数重算）
+    zigzag_atr: float = Field(1.5, ge=0.5, le=5)  # 波段高低点确认：收盘回撤超过几倍 ATR
+    adx_min: float = Field(20, ge=5, le=60)
+    # 形成 / 结束（热加载）
+    accept_bars: int = Field(4, ge=1, le=16)  # 连续几根 15m 满足条件才算站稳
+    min_4h_score: int = Field(1, ge=0, le=3)
+    cooldown_h: float = Field(4, ge=0, le=48)  # 同方向趋势结束后多久内不再推“形成”
+    hard_risk_atr4h: float = Field(2.5, gt=0, le=10)  # 失效位离现价超过几倍 ATR(4h) 就不算趋势
+    # 推送过滤：不满足的照样跟踪，但整段不推（热加载）
+    max_risk_atr4h: float = Field(1.8, gt=0, le=10)
+    max_ext_atr1h: float = Field(2.5, gt=0, le=10)  # 离 1h EMA20 超过几倍 ATR(1h) 算追远
+    climax_mult: float = Field(2.5, gt=1, le=20)  # 最近 4 小时成交额是常态中位数的几倍算高潮量
+    # 支撑压力位（热加载）
+    sr_tol_atr: float = Field(0.4, gt=0, le=2)
+    sr_half_life_d: float = Field(15, gt=0, le=120)
+    sr_vp_days: float = Field(10, gt=0, le=60)
+    sr_show: int = Field(2, ge=1, le=4)  # 推送里上下各列几个强位
+    # 数据
+    history_days: int = Field(130, ge=40, le=365)  # 启动时补齐多少天的 15m 历史
+
+    @field_validator("disabled_symbols")
+    @classmethod
+    def _upper(cls, v: list[str]) -> list[str]:
+        return [s.strip().upper() for s in v if s.strip()]
+
+    def params(self):  # noqa: ANN201
+        from .trend.levels import LevelParams
+        from .trend.machine import TrendParams
+
+        return TrendParams(
+            zigzag_atr=self.zigzag_atr,
+            adx_min=self.adx_min,
+            accept_bars=self.accept_bars,
+            min_4h_score=self.min_4h_score,
+            cooldown_h=self.cooldown_h,
+            max_ext_atr1h=self.max_ext_atr1h,
+            max_risk_atr4h=self.max_risk_atr4h,
+            hard_risk_atr4h=self.hard_risk_atr4h,
+            climax_mult=self.climax_mult,
+            levels=LevelParams(tol_atr=self.sr_tol_atr, half_life_d=self.sr_half_life_d, vp_days=self.sr_vp_days),
+        )
+
+    def symbols(self, cfg: "AppConfig") -> list[str]:
+        if not self.enabled:
+            return []
+        off = set(self.disabled_symbols)
+        return [s for s in cfg.all_symbols() if s not in off]
+
+
 class WeekendPerpCfg(_M):
     enabled: bool = False  # louis 决定关闭；本版本未实现该模块
 
@@ -359,6 +418,7 @@ class AppConfig(_M):
     discord: DiscordCfg = Field(default_factory=DiscordCfg)
     tradingview: TradingViewCfg = Field(default_factory=TradingViewCfg)
     web: WebCfg = Field(default_factory=WebCfg)
+    trend: TrendCfg = Field(default_factory=TrendCfg)
 
     @model_validator(mode="after")
     def _check(self) -> "AppConfig":

@@ -234,6 +234,11 @@ SLASH_COMMANDS: list[dict[str, Any]] = [
     {"name": "report", "description": "立即生成最近 24 小时日报"},
     {"name": "help", "description": "命令说明"},
     {
+        "name": "trend",
+        "description": "趋势状态；带代码看详情和支撑压力位",
+        "options": [{"type": 3, "name": "symbol", "description": "代码，例如 NVDA、BTC（不填看全部）", "required": False}],
+    },
+    {
         "name": "mute",
         "description": "静音一个标的",
         "options": [

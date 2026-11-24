@@ -152,6 +152,34 @@ class BinanceSpotFeed:
                 await asyncio.sleep(pause_s)
         return [b for b in out if start_ts <= b.ts < end_ts]
 
+    async def fetch_rows(self, symbol: str, interval: str, start_ts: int, end_ts: int, pause_s: float = 0.2) -> list[list[Any]]:
+        """任意周期的原始 K 线行（只要已收盘的），趋势监控补 15m 历史用。"""
+        step = {"1m": 60, "15m": 900, "1h": 3600, "4h": 14400}[interval]
+        out: list[list[Any]] = []
+        cur = start_ts
+        url = f"{self.cfg.rest_url.rstrip('/')}/api/v3/klines"
+        while cur < end_ts:
+            params = {"symbol": symbol, "interval": interval, "startTime": cur * 1000, "endTime": end_ts * 1000 - 1, "limit": 1000}
+            r = await self.http.get(url, params=params)
+            if r.status_code in (418, 429):
+                wait = float(r.headers.get("Retry-After", "30"))
+                log.warning("Binance REST 限频，等待 %.0f 秒", wait)
+                await asyncio.sleep(wait)
+                continue
+            r.raise_for_status()
+            rows = r.json()
+            if not rows:
+                break
+            now = self.clock()
+            out.extend(row for row in rows if int(row[6]) / 1000 <= now)
+            nxt = int(rows[-1][0]) // 1000 + step
+            if nxt <= cur:
+                break
+            cur = nxt
+            if pause_s:
+                await asyncio.sleep(pause_s)
+        return [row for row in out if start_ts <= int(row[0]) // 1000 < end_ts]
+
     async def backfill_since_last(self) -> list[Bar]:
         now = int(self.clock())
         end = now - now % 60  # 当前分钟还没收盘
