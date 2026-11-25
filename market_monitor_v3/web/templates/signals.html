@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% from "_macros.html" import hidden, check %}
+{% block title %}类型与提醒{% endblock %}
+{% block body %}
+<h1>异动类型与自定义提醒</h1>
+<p class="muted">V4 把每条异动分成四种类型。类型只决定标题和确认方式，不会多推一条；放量是标签，只写在卡片上。</p>
+
+{% if types is none %}
+<div class="flash err"><b>连不上监控进程。</b>类型开关和自定义提醒要监控运行时才能修改；分组仍然可以改，下次启动生效。</div>
+{% endif %}
+
+<div class="card">
+  <h2>类型开关 <span class="muted small">全部标的</span></h2>
+  {% set off = ((types or {}).get("types_off") or {}) %}
+  <form method="post" action="/signals/types">
+    {{ hidden(s) }}
+    <div class="fields">
+      {% for p in patterns %}
+      {{ check("type_" ~ p, p not in off.get("*", []), pattern_labels[p] ~ "（" ~ pattern_names[p][0] ~ " / " ~ pattern_names[p][1] ~ "）") }}
+      {% endfor %}
+    </div>
+    <div class="buttons"><button type="submit"{% if types is none %} disabled{% endif %}>保存类型开关</button></div>
+  </form>
+  {% set extra = [] %}{% for t, ps in off.items() if t != "*" and ps %}{% set _ = extra.append(t) %}{% endfor %}
+  {% if extra %}
+  <p class="small">单独关闭：
+    {% for t in extra %}<span class="pill">{{ t|replace("group:", "分组 ") }}：{% for p in off[t] %}{{ pattern_labels.get(p, p) }}{% if not loop.last %}、{% endif %}{% endfor %}</span> {% endfor %}
+  </p>
+  {% endif %}
+  <p class="small muted">按标的或分组单独开关：在群里发 <code>/types off 急拉急跌 NVDA</code>、<code>/types on 急拉急跌 存储</code>。</p>
+</div>
+
+<div class="card">
+  <h2>自选分组</h2>
+  <p class="small muted">一行一个分组，格式 <code>分组名: NVDA, INTC</code>。分组只影响联动标题（同一分组 5 分钟内 ≥ 3 只同向时写“某某板块联动”）和按分组开关类型，不影响触发。</p>
+  <form method="post" action="/signals/groups">
+    {{ hidden(s, rev) }}
+    <textarea name="groups" rows="7" class="mono wide">{% for g, ms in cfg.groups.items() %}{{ g }}: {{ ms|join(", ") }}
+{% endfor %}</textarea>
+    <div class="buttons"><button type="submit">保存分组</button></div>
+  </form>
+</div>
+
+<div class="card">
+  <h2>自定义提醒</h2>
+  {% set rules = ((alerts or {}).get("rules") or []) %}
+  {% if rules %}
+  <div class="table-wrap"><table>
+    <tr><th>#</th><th>条件</th><th>状态</th><th class="num">已触发</th><th></th></tr>
+    {% for r in rules %}
+    <tr>
+      <td class="mono">{{ r.id }}</td>
+      <td>{{ r.text }}</td>
+      <td>{% if r.enabled %}<span class="pill ok">生效</span>{% else %}<span class="pill">已触发停用</span>{% endif %}</td>
+      <td class="num">{{ r.fired }}</td>
+      <td><form method="post" action="/signals/alerts/delete">{{ hidden(s) }}<input type="hidden" name="id" value="{{ r.id }}"><button type="submit" class="small">删除</button></form></td>
+    </tr>
+    {% endfor %}
+  </table></div>
+  {% else %}
+  <p class="muted">还没有自定义提醒。</p>
+  {% endif %}
+  <form method="post" action="/signals/alerts/add">
+    {{ hidden(s) }}
+    <div class="field">
+      <label for="f-rule">新提醒</label>
+      <input type="text" id="f-rule" name="rule" placeholder="NVDA > 140" autocomplete="off" required>
+      <div class="hint">写法和群里的 /alert 一样：<code>NVDA &gt; 140</code>（上穿）、<code>NVDA &lt; 120</code>（下穿）、<code>BTC 5m -2%</code>（5 分钟跌 2%，±2% 涨跌都算）、<code>NVDA 当日 5%</code>、<code>MU 5m $20M</code>（成交额）。末尾可加 once / daily / always，以及 touch（触价即推，默认收盘确认）。</div>
+    </div>
+    <div class="buttons"><button type="submit"{% if alerts is none %} disabled{% endif %}>添加</button></div>
+  </form>
+</div>
+{% endblock %}

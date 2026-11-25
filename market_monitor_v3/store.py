@@ -116,6 +116,12 @@ CREATE TABLE IF NOT EXISTS signals (
     pattern TEXT, level TEXT, direction INTEGER, episode_id TEXT, data TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS signals_ts ON signals (ts);
+
+-- V4 自定义提醒（custom.CustomRule）；触发状态随引擎写回
+CREATE TABLE IF NOT EXISTS custom_rules (
+    id INTEGER PRIMARY KEY, symbol TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1,
+    data TEXT NOT NULL, updated_at REAL
+);
 """
 
 # 后加的列：旧数据库打开时自动补上
@@ -252,6 +258,12 @@ class Store:
                 )
             for m in eff.outs:
                 self._insert_out(m)
+            for rid, sym, enabled, data in eff.customs:
+                # 只更新还在的规则：用户刚删掉的不会被触发状态写回来
+                c.execute(
+                    "UPDATE custom_rules SET symbol=?, enabled=?, data=?, updated_at=? WHERE id=?",
+                    (sym, enabled, data, time.time(), rid),
+                )
             if eff.signals:
                 c.executemany(
                     "INSERT OR REPLACE INTO signals (id, ts, symbol, market, kind, pattern, level, direction, episode_id, data) "
@@ -566,6 +578,28 @@ class Store:
                     for (s, k), st in stats.items()
                 ],
             )
+
+    # ---- 自定义提醒 ----
+    def custom_rules(self) -> list[Any]:
+        from .custom import CustomRule
+
+        return [CustomRule.from_json(json.loads(r["data"])) for r in self.c.execute("SELECT data FROM custom_rules ORDER BY id")]
+
+    def custom_add(self, rule: Any) -> int:
+        with self.c:
+            cur = self.c.execute(
+                "INSERT INTO custom_rules (symbol, enabled, data, updated_at) VALUES (?,?,?,?)",
+                (rule.symbol, int(rule.enabled), "{}", time.time()),
+            )
+            rule.id = int(cur.lastrowid)
+            self.c.execute("UPDATE custom_rules SET data=? WHERE id=?", (json.dumps(rule.to_json(), ensure_ascii=False), rule.id))
+        return rule.id
+
+    def custom_delete(self, rule_id: int | None) -> int:
+        with self.c:
+            if rule_id is None:
+                return self.c.execute("DELETE FROM custom_rules").rowcount
+            return self.c.execute("DELETE FROM custom_rules WHERE id=?", (rule_id,)).rowcount
 
     def signals_recent(self, since: float, limit: int = 100) -> list[dict[str, Any]]:
         rows = self.c.execute(

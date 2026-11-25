@@ -46,6 +46,9 @@ class CollectSink:
     def signal(self, ev: SignalEvent) -> None:
         self.signals.append(ev)
 
+    def custom(self, rule) -> None:  # noqa: ANN001
+        pass
+
 
 @dataclass
 class ReplayResult:

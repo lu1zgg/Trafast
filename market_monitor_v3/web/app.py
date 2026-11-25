@@ -47,6 +47,7 @@ NAV = [
     ("/symbols", "标的"),
     ("/rules", "规则"),
     ("/trend", "趋势"),
+    ("/signals", "类型与提醒"),
     ("/channels", "推送渠道"),
     ("/tradingview", "TradingView"),
     ("/system", "系统"),
@@ -63,6 +64,9 @@ AUDIT_LABELS = {
     "mute": "静音",
     "unmute": "取消静音",
     "test": "测试推送",
+    "types": "类型开关",
+    "alert": "添加提醒",
+    "unalert": "删除提醒",
 }
 
 
@@ -544,6 +548,8 @@ def create_app(paths: WebPaths, control_socket: str | None = None, fail_delay_s:
             r["preset"] = preset
             for name in ("confirm_ratio", "fast_score", "l2_score", "l2_turnover_mult", "thin_turnover_frac"):
                 r[name] = _num(form, name)
+            if str(form.get("spike_extra_confirm") or "").strip():
+                r["spike_extra_confirm"] = _num(form, "spike_extra_confirm", int)
             r["thin_pre_until"] = str(form.get("thin_pre_until") or "07:00").strip()
             overrides = tomlkit.table(is_super_table=True)
             for sess in SESSION_ORDER:
@@ -605,6 +611,97 @@ def create_app(paths: WebPaths, control_socket: str | None = None, fail_delay_s:
 
         await apply(s, request, form, mutate, "趋势监控")
         return RedirectResponse("/trend", status_code=303)
+
+    # ---- V4：类型开关、分组、自定义提醒 ----
+    @app.get("/signals", response_class=HTMLResponse)
+    async def signals_page(request: Request) -> Response:
+        s = need_login(request)
+        text, _, cfg = load()
+        types = await monitor("types")
+        alerts = await monitor("alerts")
+        from ..patterns import PATTERN_LABELS, PATTERN_NAMES, PATTERNS
+
+        return page(
+            request, s, "signals.html", cfg=cfg, rev=digest(text), types=types, alerts=alerts,
+            patterns=PATTERNS, pattern_labels=PATTERN_LABELS, pattern_names=PATTERN_NAMES,
+        )
+
+    @app.post("/signals/types")
+    async def signals_types(request: Request) -> Response:
+        s = need_login(request)
+        form = await form_checked(request, s)
+        from ..patterns import PATTERNS
+
+        st = await monitor("types")
+        if st is None:
+            flash(s, "监控进程没有运行，类型开关没有保存", "err")
+            return RedirectResponse("/signals", status_code=303)
+        current = set((st.get("types_off") or {}).get("*", []))
+        changed = []
+        for p in PATTERNS:
+            off = not _bool(form, f"type_{p}")
+            if off != (p in current):
+                await monitor("types_set", target="*", pattern=p, off=off)
+                changed.append(f"{p}={'off' if off else 'on'}")
+        if changed:
+            audit.log(s.username, client_ip(request), "types", " ".join(changed))
+            flash(s, "类型开关已更新，立即生效")
+        else:
+            flash(s, "没有变化")
+        return RedirectResponse("/signals", status_code=303)
+
+    @app.post("/signals/groups")
+    async def signals_groups(request: Request) -> Response:
+        s = need_login(request)
+        form = await form_checked(request, s)
+        groups: dict[str, list[str]] = {}
+        for line in str(form.get("groups") or "").splitlines():
+            if not line.strip():
+                continue
+            name, sep, members = line.replace("：", ":").partition(":")
+            if not sep or not name.strip():
+                flash(s, f"这一行看不懂：{line.strip()}（格式：分组名: NVDA, INTC）", "err")
+                return RedirectResponse("/signals", status_code=303)
+            groups[name.strip()] = [m.strip().upper() for m in members.replace("，", ",").split(",") if m.strip()]
+
+        def mutate(doc: Any) -> None:
+            t = tomlkit.table()
+            for k, v in groups.items():
+                t[k] = v
+            if "groups" in doc:
+                del doc["groups"]
+            doc["groups"] = t
+
+        await apply(s, request, form, mutate, "分组")
+        return RedirectResponse("/signals", status_code=303)
+
+    @app.post("/signals/alerts/add")
+    async def alerts_add(request: Request) -> Response:
+        s = need_login(request)
+        form = await form_checked(request, s)
+        text = str(form.get("rule") or "").strip()
+        res = await monitor("alert_add", text=text)
+        if res is None:
+            flash(s, "监控进程没有运行，提醒没有添加", "err")
+        elif res.get("ok"):
+            audit.log(s.username, client_ip(request), "alert", text)
+            flash(s, res.get("message") or "已添加")
+        else:
+            flash(s, res.get("error") or "添加失败", "err")
+        return RedirectResponse("/signals", status_code=303)
+
+    @app.post("/signals/alerts/delete")
+    async def alerts_delete(request: Request) -> Response:
+        s = need_login(request)
+        form = await form_checked(request, s)
+        rid = str(form.get("id") or "")
+        res = await monitor("alert_del", id=None if rid == "all" else int(rid))
+        if res is None:
+            flash(s, "监控进程没有运行", "err")
+        else:
+            audit.log(s.username, client_ip(request), "unalert", rid)
+            flash(s, f"已删除 {res.get('removed', 0)} 条")
+        return RedirectResponse("/signals", status_code=303)
 
     # ---- 推送渠道 ----
     def _route_form(t: Table, form: Any, prefix: str) -> None:

@@ -28,7 +28,7 @@ SESSION_LABELS = {
     "CWE": "周末",
     "CLOSED": "休市",
 }
-RULE_MAJOR = "v3.0"
+RULE_MAJOR = "v4.0"
 
 Triple = tuple[float, float, float]
 
@@ -201,7 +201,11 @@ class RulesCfg(_M):
     confirm_ratio: float = Field(0.6, gt=0, le=1)
     fast_score: float = Field(2.0, gt=1)
     l2_score: float = Field(1.5, ge=1)
-    l2_turnover_mult: float = Field(3.0, gt=0)
+    # V4 去掉了“成交额 ≥ 常态 N 倍 → L2”（回测里 90%–100% 的告警都满足，级别没有区分度）。
+    # 0 = 关闭；想恢复 V3 的行为填 3。
+    l2_turnover_mult: float = Field(0.0, ge=0)
+    # 急拉急跌（L1 / L2）在普通确认之后再等几根 K 线，每根都保留 ≥ confirm_ratio 才推；L3 不等。0 = 不多等
+    spike_extra_confirm: int = Field(2, ge=0, le=5)
     thin_turnover_frac: float = Field(0.25, ge=0, le=1)
     thin_pre_until: str = "07:00"  # 美东时间；之前的盘前按稀薄时段处理
     # 这些时段里，快速通道（L3）也要等下一根 K 线确认。盘外成交稀薄，单根坏价（例如按上一交易日收盘价
@@ -251,6 +255,9 @@ class MergeCfg(_M):
     fast_batch_delay_s: float = Field(2, ge=0)
     max_new_per_min: int = Field(6, ge=1)
     expiry_s: int = Field(600, ge=60)
+    # 分组联动：同一分组在这段时间内同向确认的标的并进同一条消息；达到 group_min 只时标题写分组名
+    group_window_s: int = Field(300, ge=0)
+    group_min: int = Field(3, ge=2)
 
 
 class LongbridgeCfg(_M):
@@ -399,6 +406,15 @@ class TrendCfg(_M):
         return [s for s in cfg.all_symbols() if s not in off]
 
 
+DEFAULT_GROUPS: dict[str, list[str]] = {
+    "存储": ["MU", "SNDK", "STX"],
+    "芯片": ["NVDA", "INTC"],
+    "平台与汽车": ["GOOGL", "META", "TSLA"],
+    "能源与太空": ["BE", "SPCX"],
+    "加密": ["BTC", "ETH", "SOL"],
+}
+
+
 class WeekendPerpCfg(_M):
     enabled: bool = False  # louis 决定关闭；本版本未实现该模块
 
@@ -419,6 +435,8 @@ class AppConfig(_M):
     tradingview: TradingViewCfg = Field(default_factory=TradingViewCfg)
     web: WebCfg = Field(default_factory=WebCfg)
     trend: TrendCfg = Field(default_factory=TrendCfg)
+    # 自选分组：分组名 → 标的（写简称即可，如 NVDA、BTC）。只影响联动标题、统计和按分组开关类型，不影响触发
+    groups: dict[str, list[str]] = Field(default_factory=lambda: {k: list(v) for k, v in DEFAULT_GROUPS.items()})
 
     @model_validator(mode="after")
     def _check(self) -> "AppConfig":
@@ -434,6 +452,14 @@ class AppConfig(_M):
     def db_path(self) -> Path:
         p = Path(self.storage.db_file)
         return p if p.is_absolute() else Path(self.general.state_dir) / p
+
+    def groups_of(self, symbol: str) -> list[str]:
+        """标的所在的分组（按简称匹配，不区分大小写）。"""
+        from .models import display_name
+
+        name = display_name(symbol).upper()
+        full = symbol.upper()
+        return [g for g, members in self.groups.items() if any(m.upper() in (name, full) for m in members)]
 
     def all_symbols(self) -> list[str]:
         out: list[str] = []
@@ -501,6 +527,7 @@ class Params:
             "episode": cfg.episode.model_dump(mode="json"),
             "merge": cfg.merge.model_dump(mode="json"),
             "overnight": cfg.stocks.overnight,
+            "groups": {k: sorted(v) for k, v in sorted(cfg.groups.items())},
         }
         h = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:8]
         return f"{RULE_MAJOR}-{self.label}-{h}"

@@ -22,6 +22,8 @@ OUTCOME_LABELS = {
     "cooldown": "冷却期",
     "muted": "静音",
     "expired_pending": "确认超时",
+    "spike_rejected": "急拉急跌多确认没站稳",
+    "type_off": "类型已关闭",
 }
 
 

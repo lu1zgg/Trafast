@@ -58,9 +58,10 @@ def test_vol_tag_needs_three_heavy_bars():
     assert "vol" not in run(closes, light).tags
 
 
-def test_classification_does_not_change_level():
-    c = run([100] * 20 + [100.6], [1e6] * 20 + [3.5e6])
-    assert c.level == "L2"  # V3 的成交额规则仍在（P1 才去掉）
+def test_volume_does_not_change_level():
+    # 成交额放大不再升级（V4 去掉了 turnover → L2），放量也只是标签
+    c = run([100] * 20 + [100.6], [1e6] * 17 + [8e6] * 4)
+    assert c.level == "L1" and "vol" in c.tags
 
 
 def test_engine_emits_signal_events_and_tags_decisions():

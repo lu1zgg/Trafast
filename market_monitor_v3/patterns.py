@@ -28,7 +28,21 @@ PATTERN_LABELS = {
     "spike": "急拉急跌",
     "trend": "持续推进",
 }
+# 卡片标题里按方向的叫法（上涨, 下跌）
+PATTERN_NAMES = {
+    "v_reversal": ("低位反弹", "高位回落"),
+    "breakout": ("盘整突破", "平台跳水"),
+    "spike": ("急拉", "急跌"),
+    "trend": ("持续上涨", "持续下跌"),
+}
 TAG_LABELS = {"vol": "放量"}
+# /types 和网页后台接受的写法 → 类型
+PATTERN_ALIASES = {
+    **{p: p for p in PATTERNS},
+    **{v: k for k, v in PATTERN_LABELS.items()},
+    **{name: k for k, pair in PATTERN_NAMES.items() for name in pair},
+    "v反转": "v_reversal", "反转": "v_reversal", "突破": "breakout", "急拉急跌": "spike", "推进": "trend",
+}
 
 PRIOR_LEG_MIN = 15  # V 反转看起点之前多少分钟
 PRE_BARS = 10  # 盘整看起点之前多少根
@@ -128,3 +142,40 @@ def volume_ratio(bar: Bar, hist: SymbolHistory, baselines: Baselines) -> tuple[f
 
 def pattern_label(pattern: str | None) -> str:
     return PATTERN_LABELS.get(pattern or "", "")
+
+
+def pattern_name(pattern: str | None, direction: int) -> str:
+    pair = PATTERN_NAMES.get(pattern or "")
+    if pair is None:
+        return ""
+    return pair[0] if direction > 0 else pair[1]
+
+
+def parse_pattern(s: str) -> str | None:
+    t = s.strip()
+    return PATTERN_ALIASES.get(t) or PATTERN_ALIASES.get(t.lower()) or PATTERN_ALIASES.get(t.replace(" ", ""))
+
+
+def _p(x: float) -> str:
+    v = abs(math.exp(abs(x)) - 1) * 100
+    return f"{v:.{2 if v < 1 else 1}f}%"
+
+
+def reason_text(pattern: str, direction: int, k: int, d: float, reason: dict[str, float | None]) -> str:
+    """卡片上“为什么是这个类型”的一行。d 是主窗口的对数位移。"""
+    up = direction > 0
+    move = ("涨" if up else "跌") + " " + _p(d)
+    if pattern == "breakout" and reason.get("pre_amp") is not None:
+        return f"异动前 {PRE_BARS} 分钟振幅 {_p(reason['pre_amp'])}，之后 {k} 分钟{move}"
+    if pattern == "v_reversal" and reason.get("prior_leg") is not None:
+        before = ("跌" if up else "涨") + " " + _p(reason["prior_leg"])
+        return f"此前 {PRIOR_LEG_MIN} 分钟{before}，随后 {k} 分钟{move}"
+    if pattern == "spike":
+        if k == 1:
+            return f"1 分钟内{move}"
+        share = reason.get("last_share")
+        tail = f"，最后 1 分钟占 {share * 100:.0f}%" if share is not None else ""
+        return f"{k} 分钟{move}{tail}"
+    if pattern == "trend":
+        return f"{k} 分钟内逐步{move}"
+    return ""

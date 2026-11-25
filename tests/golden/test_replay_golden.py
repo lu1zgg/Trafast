@@ -94,9 +94,12 @@ def test_correlated_drop_merged(res):
     msgs = near(sends(res, "C"), ev.t0, 5)
     assert len(msgs) == 1, "三个币同一分钟下跌应合并成一条"
     text = to_plain(msgs[0].text)
-    for name in ("BTC", "ETH", "SOL"):
+    for name in ("ETH", "SOL"):
         assert name in text
     assert "同时" in text
+    # V4：BTC 这一下是急拉急跌（L2），多确认 2 分钟后静默编辑进同一条，不另发
+    edits = [to_plain(m.text) for m in res.outs if m.kind == "edit" and m.parent_key == msgs[0].key]
+    assert any("BTC" in t and "急跌" in t and "之后 3 分钟都保留" in t for t in edits)
     ends = [m for m in res.outs if m.kind == "edit" and m.parent_key == msgs[0].key]
     final = to_plain(ends[-1].text) if ends else ""
     assert final.count("已结束") == 3 and all(n in final for n in ("BTC", "ETH", "SOL"))
@@ -205,3 +208,13 @@ def test_cli_check_config_example(capsys, monkeypatch):
     out = capsys.readouterr().out
     assert "配置有效" in out and "灵敏" in out
     assert "TELEGRAM_BOT_TOKEN：未设置" in out
+
+
+# V3（v3.0-灵敏）在同一段合成行情上的消息数：首发 4、回复 3。V4 只能更少，不能更多。
+V3_SENDS, V3_REPLIES = 4, 3
+
+
+def test_v4_not_noisier_than_v3(res):
+    kinds = [m.kind for m in res.outs]
+    assert kinds.count("send") <= V3_SENDS
+    assert kinds.count("reply") <= V3_REPLIES
