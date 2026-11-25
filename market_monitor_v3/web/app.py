@@ -588,7 +588,9 @@ def create_app(paths: WebPaths, control_socket: str | None = None, fail_delay_s:
         s = need_login(request)
         text, _, cfg = load()
         st = await monitor("trend")
-        return page(request, s, "trend.html", cfg=cfg, rev=digest(text), st=st, all_symbols=cfg.all_symbols())
+        live = {it["symbol"]: it for it in (st or {}).get("items") or []}
+        groups = [("美股", "正常盘 09:30–16:00 美东", cfg.stocks.symbols), ("加密货币", "全天 24 小时", cfg.crypto.symbols)]
+        return page(request, s, "trend.html", cfg=cfg, rev=digest(text), st=st, groups=groups, live=live)
 
     @app.post("/trend")
     async def trend_save(request: Request) -> Response:
