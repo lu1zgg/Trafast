@@ -109,6 +109,13 @@ CREATE TABLE IF NOT EXISTS trend_events (
     d INTEGER, price REAL, data TEXT
 );
 CREATE INDEX IF NOT EXISTS trend_events_ts ON trend_events (ts);
+
+-- V4 结构化信号（SignalEvent）：每次推送和事件结束一条；data 是完整 JSON
+CREATE TABLE IF NOT EXISTS signals (
+    id TEXT PRIMARY KEY, ts INTEGER NOT NULL, symbol TEXT NOT NULL, market TEXT, kind TEXT NOT NULL,
+    pattern TEXT, level TEXT, direction INTEGER, episode_id TEXT, data TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS signals_ts ON signals (ts);
 """
 
 # 后加的列：旧数据库打开时自动补上
@@ -117,6 +124,11 @@ OUTBOX_EXTRA_COLS = {
     "ext_id": "TEXT",
     "market": "TEXT",
     "direction": "INTEGER NOT NULL DEFAULT 0",
+}
+
+# alerts 表后加的列
+ALERT_EXTRA_COLS = {
+    "pattern": "TEXT",
 }
 
 ALERT_COLS = (
@@ -136,6 +148,7 @@ ALERT_COLS = (
     "turnover_ratio",
     "episode_id",
     "rule_version",
+    "pattern",
 )
 
 
@@ -186,6 +199,10 @@ class Store:
             if col not in have:
                 self.conn.execute(f"ALTER TABLE outbox ADD COLUMN {col} {decl}")
         self.conn.execute("CREATE INDEX IF NOT EXISTS outbox_channel ON outbox (channel, status, next_at)")
+        have = {r["name"] for r in self.conn.execute("PRAGMA table_info(alerts)")}
+        for col, decl in ALERT_EXTRA_COLS.items():
+            if col not in have:
+                self.conn.execute(f"ALTER TABLE alerts ADD COLUMN {col} {decl}")
         self.conn.commit()
 
     async def open(self) -> None:
@@ -235,6 +252,18 @@ class Store:
                 )
             for m in eff.outs:
                 self._insert_out(m)
+            if eff.signals:
+                c.executemany(
+                    "INSERT OR REPLACE INTO signals (id, ts, symbol, market, kind, pattern, level, direction, episode_id, data) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    [
+                        (
+                            ev.id, ev.ts, ev.symbol, ev.market, ev.kind, ev.pattern, ev.level, ev.direction,
+                            ev.episode_id, json.dumps(ev.to_json(), ensure_ascii=False),
+                        )
+                        for ev in eff.signals
+                    ],
+                )
 
     def _insert_bars(self, bars: Iterable[Bar]) -> None:
         self.c.executemany(
@@ -538,6 +567,12 @@ class Store:
                 ],
             )
 
+    def signals_recent(self, since: float, limit: int = 100) -> list[dict[str, Any]]:
+        rows = self.c.execute(
+            "SELECT data FROM signals WHERE ts>=? ORDER BY ts DESC LIMIT ?", (int(since), limit)
+        ).fetchall()
+        return [json.loads(r["data"]) for r in rows]
+
     # ---- 维护 ----
     def maintenance(self, now: float, bars_days: int, l0_days: int, outbox_days: int, backup_dir: Path, backup_keep: int) -> str:
         c = self.c
@@ -557,6 +592,7 @@ class Store:
             c.execute("DELETE FROM baseline WHERE computed_at<?", (int(now - 180 * 86400),))
             c.execute("DELETE FROM trend_bars WHERE ts<?", (int(now - 400 * 86400),))
             c.execute("DELETE FROM trend_events WHERE ts<?", (int(now - 400 * 86400),))
+            c.execute("DELETE FROM signals WHERE ts<?", (int(now - 400 * 86400),))
         c.execute("PRAGMA optimize")
         c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         backup_dir.mkdir(parents=True, exist_ok=True)

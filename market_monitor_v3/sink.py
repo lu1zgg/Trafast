@@ -6,7 +6,7 @@ import json
 from dataclasses import asdict, dataclass, field
 from typing import Protocol
 
-from .models import Bar, Decision, Episode, OutMsg, RootMessage
+from .models import Bar, Decision, Episode, OutMsg, RootMessage, SignalEvent
 
 
 class Sink(Protocol):
@@ -15,6 +15,7 @@ class Sink(Protocol):
     def episode(self, ep: Episode) -> None: ...
     def root(self, r: RootMessage) -> None: ...
     def out(self, m: OutMsg) -> None: ...
+    def signal(self, ev: SignalEvent) -> None: ...
 
 
 @dataclass
@@ -24,9 +25,10 @@ class Effects:
     episodes: list[tuple[str, str, str, str, int, int | None]] = field(default_factory=list)  # 已序列化
     roots: list[tuple[str, str]] = field(default_factory=list)  # (key, json)
     outs: list[OutMsg] = field(default_factory=list)
+    signals: list[SignalEvent] = field(default_factory=list)
 
     def empty(self) -> bool:
-        return not (self.bars or self.decisions or self.episodes or self.roots or self.outs)
+        return not (self.bars or self.decisions or self.episodes or self.roots or self.outs or self.signals)
 
 
 class BufferSink:
@@ -36,6 +38,7 @@ class BufferSink:
         self._episodes: dict[str, Episode] = {}
         self._roots: dict[str, RootMessage] = {}
         self._outs: list[OutMsg] = []
+        self._signals: list[SignalEvent] = []
 
     def bar(self, b: Bar) -> None:
         self._bars.append(b)
@@ -52,6 +55,9 @@ class BufferSink:
     def out(self, m: OutMsg) -> None:
         self._outs.append(m)
 
+    def signal(self, ev: SignalEvent) -> None:
+        self._signals.append(ev)
+
     def drain(self) -> Effects:
         """在事件循环线程里序列化，避免写库线程读到正在变化的对象。"""
         eff = Effects(
@@ -64,8 +70,9 @@ class BufferSink:
             ],
             roots=[(r.key, json.dumps(r.to_json(), ensure_ascii=False)) for r in self._roots.values()],
             outs=self._outs,
+            signals=self._signals,
         )
-        self._bars, self._decisions, self._outs = [], [], []
+        self._bars, self._decisions, self._outs, self._signals = [], [], [], []
         self._episodes, self._roots = {}, {}
         return eff
 

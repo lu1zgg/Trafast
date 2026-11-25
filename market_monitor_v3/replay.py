@@ -14,7 +14,8 @@ from datetime import UTC, datetime, timedelta
 from .baseline import Baselines, compute_symbol_baseline
 from .config import CRYPTO_SESSIONS, SESSION_LABELS, STOCK_SESSIONS, AppConfig, Params
 from .engine import Engine
-from .models import Bar, Decision, OutMsg, market_of
+from .models import Bar, Decision, OutMsg, SignalEvent, market_of
+from .patterns import PATTERN_LABELS, PATTERNS
 from .render import to_plain
 from .sessions import ET, UsCalendar, crypto_instance, crypto_session
 
@@ -25,6 +26,7 @@ class CollectSink:
     def __init__(self) -> None:
         self.outs: list[OutMsg] = []
         self.decisions: list[Decision] = []
+        self.signals: list[SignalEvent] = []
 
     def bar(self, b: Bar) -> None:
         pass
@@ -41,6 +43,9 @@ class CollectSink:
     def out(self, m: OutMsg) -> None:
         self.outs.append(m)
 
+    def signal(self, ev: SignalEvent) -> None:
+        self.signals.append(ev)
+
 
 @dataclass
 class ReplayResult:
@@ -50,6 +55,9 @@ class ReplayResult:
     outs: list[OutMsg]
     decisions: list[Decision]
     stats: dict[str, float] = field(default_factory=dict)
+    signals: list[SignalEvent] = field(default_factory=list)
+    # 首发信号 id → 30 分钟内是否回到起点（回吐）；None = 数据不够 30 分钟
+    giveback: dict[str, bool | None] = field(default_factory=dict)
 
     def messages(self) -> list[OutMsg]:
         return [m for m in self.outs if m.kind in ("send", "reply")]
@@ -84,7 +92,30 @@ class ReplayResult:
             ),
             "挡下的候选：" + ("，".join(f"{k} {v}" for k, v in l0.most_common()) or "无"),
         ]
+        lines.extend(self.pattern_lines())
         return "\n".join(lines)
+
+    def pattern_lines(self) -> list[str]:
+        """V4：首发信号按形态类型统计条数和 30 分钟回吐率（回到起点价算回吐）。"""
+        opens = [ev for ev in self.signals if ev.kind == "open"]
+        if not opens:
+            return []
+        out = []
+        for market, label in (("US", "美股"), ("CRYPTO", "加密")):
+            evs = [ev for ev in opens if ev.market == market]
+            if not evs:
+                continue
+            parts = []
+            for p in PATTERNS:
+                sel = [ev for ev in evs if ev.pattern == p]
+                if not sel:
+                    continue
+                known = [self.giveback.get(ev.id) for ev in sel if self.giveback.get(ev.id) is not None]
+                gb = f"，回吐 {100 * sum(known) / len(known):.0f}%" if known else ""
+                parts.append(f"{PATTERN_LABELS[p]} {len(sel)}{gb}")
+            vol = sum(1 for ev in evs if "vol" in ev.tags)
+            out.append(f"按类型（{label}）：" + "；".join(parts) + f"；带放量标签 {vol}")
+        return out
 
 
 def key_market(key: str) -> str:
@@ -215,7 +246,29 @@ def run_replay(
 
     stats = {"us_weekdays": float(len(us_days))}
     stats.update({f"engine_{k}": float(v) for k, v in engine.stats.items()})
-    return ReplayResult(start_ts, end_ts, params.rule_version, sink.outs, sink.decisions, stats)
+    giveback = {
+        ev.id: gave_back(by_sym.get(ev.symbol, []), ts_index.get(ev.symbol, []), ev)
+        for ev in sink.signals
+        if ev.kind == "open"
+    }
+    return ReplayResult(
+        start_ts, end_ts, params.rule_version, sink.outs, sink.decisions, stats, sink.signals, giveback
+    )
+
+
+def gave_back(bars: list[Bar], idx: list[int], ev: SignalEvent, minutes: int = 30) -> bool | None:
+    """首发后 minutes 分钟内，收盘价是否回到起点价（或越过）。之后的数据不足 minutes 分钟时返回 None。"""
+    if ev.anchor <= 0:
+        return None
+    start = ev.ts  # 首发 K 线的收盘时间 = 下一根的开始时间
+    lo = bisect.bisect_left(idx, start)
+    hi = bisect.bisect_left(idx, start + minutes * 60)
+    if not idx or idx[-1] < start + (minutes - 1) * 60:
+        return None
+    for b in bars[lo:hi]:
+        if b.c > 0 and ev.direction * math.log(b.c / ev.anchor) <= 0:
+            return True
+    return False
 
 
 def max_move(bars: list[Bar], k: int = 15) -> float:

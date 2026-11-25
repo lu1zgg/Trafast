@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from . import render
 from .config import WINDOWS, Params
 from .merge import Merger, OpenAlert
-from .models import LEVEL_RANK, Bar, Candidate, Decision, Episode, Evaluation, OutMsg, WindowHit, display_name
+from .models import LEVEL_RANK, Bar, Candidate, Decision, Episode, Evaluation, OutMsg, SignalEvent, WindowHit, display_name
 from .sink import Sink
 
 
@@ -178,11 +178,14 @@ class EpisodeManager:
             last_msg_at=now,
             last_extreme_at=bar.close_ts,
             last_price=bar.c,
+            pattern=c.pattern,
+            tags=list(c.tags),
         )
         tr.episode = ep
         self._decide(c, "pushed", level, retained, ep.id)
         self.merger.add(OpenAlert(ep, c, level, retained, bar.c, bar.close_ts), now)
         self.sink.episode(ep)
+        self._signal(ep, "open", bar, move_now, score=c.score, retained=retained, reason=c.reason)
 
     def _update(self, tr: Tracker, bar: Bar, cand: Candidate | None, now: float) -> bool:
         ep = tr.episode
@@ -231,6 +234,7 @@ class EpisodeManager:
                 ep.last_msg_at = now
                 if upgrade:
                     ep.level = upgrade
+                self._signal(ep, "upgrade" if upgrade else "extend", bar, move, score=cand.score if consumed and cand else None)
         if consumed and cand is not None:
             self._decide(cand, "absorbed", "L0", episode_id=ep.id)
         self.sink.episode(ep)
@@ -249,6 +253,63 @@ class EpisodeManager:
         tr.cooldown_anchor = ep.anchor
         self.merger.end_episode(ep, now)
         self.sink.episode(ep)
+        self.sink.signal(
+            SignalEvent(
+                id=f"{ep.id}:end",
+                ts=int(end_ts),
+                kind="end",
+                symbol=ep.symbol,
+                market=ep.market,
+                session=ep.session,
+                direction=ep.direction,
+                level=ep.level,
+                pattern=ep.pattern,
+                tags=list(ep.tags),
+                price=ep.last_price,
+                anchor=ep.anchor,
+                move=move,
+                k=ep.k,
+                score=None,
+                episode_id=ep.id,
+                rule_version=self.params.rule_version,
+                end_reason=reason,
+            )
+        )
+
+    def _signal(
+        self,
+        ep: Episode,
+        kind: str,
+        bar: Bar,
+        move: float,
+        score: float | None = None,
+        retained: float | None = None,
+        reason: dict[str, float | None] | None = None,
+    ) -> None:
+        seq = "open" if kind == "open" else f"r{ep.replies}"
+        self.sink.signal(
+            SignalEvent(
+                id=f"{ep.id}:{seq}",
+                ts=bar.close_ts,
+                kind=kind,
+                symbol=ep.symbol,
+                market=ep.market,
+                session=bar.session or ep.session,
+                direction=ep.direction,
+                level=ep.level,
+                pattern=ep.pattern,
+                tags=list(ep.tags),
+                price=bar.c,
+                anchor=ep.anchor,
+                move=move,
+                k=ep.k,
+                score=score,
+                episode_id=ep.id,
+                rule_version=self.params.rule_version,
+                retained=retained,
+                reason=dict(reason or {}),
+            )
+        )
 
     def _sess(self, bar: Bar, ep: Episode) -> str:
         return bar.session if bar.session in self.params.sessions else ep.session
@@ -288,6 +349,7 @@ class EpisodeManager:
                 turnover_ratio=p.turnover_ratio,
                 episode_id=episode_id,
                 rule_version=self.params.rule_version,
+                pattern=c.pattern or None,
             )
         )
 
