@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import hidden, num, check %}
+{% from "_macros.html" import hidden, num %}
 {% block title %}趋势{% endblock %}
 {% block body %}
 <h1>趋势监控</h1>
@@ -64,14 +64,43 @@
 <form method="post" action="/trend">
 {{ hidden(s, rev) }}
 <div class="card">
-  <h2>开关与标的</h2>
-  <div class="checks">
-    {{ check("enabled", cfg.trend.enabled, "启用趋势监控", "关闭或改标的需要重启监控（会自动重启，约 15 秒）") }}
+  <div class="card-head">
+    <h2>开关与标的</h2>
+    <label class="switch-row"><span>启用趋势监控</span>
+      <span class="switch"><input type="checkbox" name="enabled"{% if cfg.trend.enabled %} checked{% endif %}><span class="slider"></span></span>
+    </label>
   </div>
-  <div class="checks">
-    {% for x in all_symbols %}{{ check("sym_" ~ x, x not in cfg.trend.disabled_symbols, name(x)) }}{% endfor %}
+  <p class="small muted">关掉总开关或改标的后，监控会自动重启（约 15 秒）。推送到哪个渠道在“推送渠道”页勾选；静音的标的不推趋势。</p>
+  <div class="grid">
+    {% for title, hint, syms in groups %}
+    <div class="sym-group">
+      <div class="sym-head">
+        <b>{{ title }}</b>
+        <span class="muted small">{{ hint }} · 已开 {{ syms|reject("in", cfg.trend.disabled_symbols)|list|length }} / {{ syms|length }}</span>
+      </div>
+      {% if syms %}
+      <ul class="sym-list">
+        {% for x in syms %}{% set it = live.get(x) %}{% set a = it.active if it else none %}
+        <li>
+          <label class="sym-row">
+            <span class="sym-name"><b>{{ name(x) }}</b> <span class="muted small mono">{{ x }}</span></span>
+            <span class="sym-state small">
+              {% if x in cfg.trend.disabled_symbols %}<span class="muted">未开启</span>
+              {% elif not it %}<span class="muted">—</span>
+              {% elif a %}<span class="{{ 'up' if a.d > 0 else 'down' }}">{{ '📈 上涨趋势' if a.d > 0 else '📉 下跌趋势' }}</span>
+              {% elif not it.seeded %}<span class="muted">预热中</span>
+              {% elif not it.ready %}<span class="muted">数据不足</span>
+              {% else %}<span class="muted">无趋势</span>{% endif %}
+            </span>
+            <span class="switch"><input type="checkbox" name="sym_{{ x }}"{% if x not in cfg.trend.disabled_symbols %} checked{% endif %} aria-label="{{ name(x) }} 趋势监控"><span class="slider"></span></span>
+          </label>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}<p class="muted small">没有{{ title }}标的，在“标的”页添加。</p>{% endif %}
+    </div>
+    {% endfor %}
   </div>
-  <p class="small muted">推送到哪个渠道，在“推送渠道”页每个渠道的“趋势形成 / 结束”里勾选。静音的标的不推趋势。</p>
 </div>
 
 <div class="card">

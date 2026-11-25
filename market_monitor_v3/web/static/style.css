@@ -215,3 +215,21 @@ pre.block { white-space: pre-wrap; word-break: break-all; background: var(--code
 td:first-child { white-space: nowrap; }
 table.ovr input { min-width: 130px; }
 table.ovr input.narrow { min-width: 70px; }
+
+/* 开关（趋势页标的列表） */
+.switch { position: relative; display: inline-block; flex: none; width: 40px; height: 22px; }
+.switch input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; z-index: 1; }
+.switch .slider { position: absolute; inset: 0; border-radius: 999px; background: var(--line); transition: background .15s; }
+.switch .slider::before { content: ""; position: absolute; left: 3px; top: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.25); transition: transform .15s; }
+.switch input:checked + .slider { background: var(--accent); }
+.switch input:checked + .slider::before { transform: translateX(18px); }
+.switch input:focus-visible + .slider { outline: 2px solid var(--accent); outline-offset: 2px; }
+.switch-row { display: flex; align-items: center; gap: 10px; margin: 0; font-size: 14px; color: var(--text); cursor: pointer; }
+.sym-group { border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.sym-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; padding: 10px 14px; background: var(--code-bg); }
+.sym-list { list-style: none; margin: 0; padding: 0; }
+.sym-list li + li { border-top: 1px solid var(--line); }
+.sym-row { display: flex; align-items: center; gap: 12px; margin: 0; padding: 9px 14px; font-size: 14px; color: var(--text); cursor: pointer; }
+.sym-row:hover { background: var(--code-bg); }
+.sym-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sym-state { flex: none; text-align: right; }
