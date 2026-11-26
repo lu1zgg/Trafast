@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "market-monitor-v3"
-version = "3.0.0"
+version = "4.0.0"
 description = "美股正股与加密货币现货异动监控（Telegram / Discord 推送，网页管理后台）"
 requires-python = ">=3.11"
 dependencies = [

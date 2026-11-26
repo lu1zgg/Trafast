@@ -1,16 +1,22 @@
 # 桌面版（Tauri）：检查、单元测试，并在 macOS 和 Windows 上打安装包。
 # - 推到 main 或改动 desktop/ 的 PR：打包后作为 Actions 构件（Artifacts）下载
-# - 推 desktop-v* 标签（例如 desktop-v0.4.0）：另外建一个草稿 Release，附上安装包
+# - 推 v* 标签（例如 v4.0.0），或手动运行时填 release_tag：发正式 Release，
+#   附上桌面版安装包、服务器后端源码包和 SHA256 校验和；说明取自 .github/release-notes/<标签>.md
 name: desktop
 
 on:
   push:
     branches: [main]
     paths: ["desktop/**", ".github/workflows/desktop.yml"]
-    tags: ["desktop-v*"]
+    tags: ["v*"]
   pull_request:
     paths: ["desktop/**", ".github/workflows/desktop.yml"]
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "要发布的版本标签（例如 v4.0.0，留空只打包不发布）；标签不存在时在当前提交上新建"
+        required: false
+        default: ""
 
 concurrency:
   group: desktop-${{ github.ref }}
@@ -74,18 +80,34 @@ jobs:
           if-no-files-found: error
 
   release:
-    if: startsWith(github.ref, 'refs/tags/desktop-v')
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.release_tag != ''
     needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      TAG: ${{ inputs.release_tag || github.ref_name }}
+    defaults:
+      run:
+        working-directory: .
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
+      - name: 服务器后端源码包、校验和
+        run: |
+          name="trafast-server-${TAG}"
+          git archive --format=tar.gz --prefix="${name}/" -o "dist/${name}.tar.gz" HEAD -- . ':!desktop' ':!.github'
+          git archive --format=zip --prefix="${name}/" -o "dist/${name}.zip" HEAD -- . ':!desktop' ':!.github'
+          cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+          notes="../.github/release-notes/${TAG}.md"
+          if [ -f "$notes" ]; then cp "$notes" ../release-notes.md; else echo "Trafast ${TAG}" > ../release-notes.md; fi
       - uses: softprops/action-gh-release@v2
         with:
-          draft: true
-          name: Trafast 桌面版 ${{ github.ref_name }}
+          tag_name: ${{ env.TAG }}
+          target_commitish: ${{ github.sha }}
+          name: Trafast ${{ env.TAG }}
+          body_path: release-notes.md
           files: dist/*

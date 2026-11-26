@@ -15,10 +15,12 @@
 ## 安装
 
 1. 服务器先升级到 V4（有 `/api/v1`），在网页后台「API 密钥」页生成一个**读写**密钥（或 `sudo mm api-key create --name 我的Mac`）。
-2. 下载安装包：GitHub 仓库的 Actions → `desktop` → 最新一次成功的运行 → Artifacts：
-   - `trafast-desktop-macos-universal`：`.dmg`（Intel 和 Apple 芯片通用，macOS 11 及以上）
-   - `trafast-desktop-windows-x64`：`.exe`（安装程序）或 `.msi`
-   推 `desktop-v0.4.0` 这样的标签时还会建一个草稿 Release，附上同样的安装包。
+2. 下载安装包：GitHub 仓库的 **Releases** 页（最新版本）：
+   - `Trafast_<版本>_universal.dmg`：Mac（Intel 和 Apple 芯片通用，macOS 11 及以上）
+   - `Trafast_<版本>_x64-setup.exe`（安装程序）或 `Trafast_<版本>_x64_<语言>.msi`：Windows
+   - 同一个 Release 里还有服务器后端源码包 `trafast-server-<版本>.tar.gz` / `.zip` 和 `SHA256SUMS.txt`。
+   没发版的最新代码，安装包在 Actions → `desktop` → 最新一次成功的运行 → Artifacts。
+   发版：在 main 上推 `v4.0.0` 这样的标签（或手动运行 `desktop` 工作流并填 `release_tag`），发版说明写在 `.github/release-notes/<标签>.md`。
 3. 安装包**没有签名**，第一次打开会被系统拦一下：
    - macOS：在「访达」里右键 Trafast → 打开 → 打开。还不行就在终端执行 `xattr -cr /Applications/Trafast.app`。
    - Windows：SmartScreen 提示时点「更多信息」→「仍要运行」。
