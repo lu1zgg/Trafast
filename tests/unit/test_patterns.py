@@ -3,8 +3,8 @@ from market_monitor_v3.config import Params
 from market_monitor_v3.detector import evaluate
 from market_monitor_v3.models import Bar
 from market_monitor_v3.sessions import UsCalendar
-from tests.helpers import Harness, flat_baselines, make_cfg, utc_ts
 from market_monitor_v3.windows import SymbolHistory
+from tests.helpers import Harness, flat_baselines, make_cfg, utc_ts
 
 CAL = UsCalendar()
 P = Params(make_cfg())
@@ -17,7 +17,7 @@ def run(closes, turnovers=None):
     h = SymbolHistory()
     turnovers = turnovers or [1e6] * len(closes)
     bar = None
-    for i, (c, tv) in enumerate(zip(closes, turnovers)):
+    for i, (c, tv) in enumerate(zip(closes, turnovers, strict=True)):
         bar = Bar(S, T0 + 60 * i, c, c, c, c, 1, tv, "CWD", "t")
         h.add(bar)
     return evaluate(bar, h, P, BL, CAL.is_thin).candidate

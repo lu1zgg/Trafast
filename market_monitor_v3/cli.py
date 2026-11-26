@@ -453,6 +453,37 @@ def cmd_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_tick_report(args: argparse.Namespace) -> int:
+    """V4 P2 单笔冲涨跌影子报告：逐笔接受比 K 线推送早多少秒、多少次后来没有过入门门。"""
+    from .store import Store
+    from .tick_report import report_lines, summarize
+
+    cfg = _cfg(args)
+    if _db_missing(cfg.db_path):
+        return 1
+    st = Store(cfg.db_path)
+    st.open_sync()
+    try:
+        now = time.time()
+        start = now - args.days * 86400
+        shadows = st.tick_shadows(start, now)
+        signals = st.signals_between(start - 600, now + 600, "open")
+        covered = {r["symbol"] for r in st.c.execute("SELECT DISTINCT symbol FROM tick_1m WHERE ts>=?", (int(start),))}
+        print(f"最近 {args.days} 天（{len(covered)} 个标的有逐笔数据）")
+        for line in report_lines(summarize(shadows, signals, covered), detail=True):
+            print(line)
+        if args.show:
+            for sh in shadows:
+                t = time.strftime("%m-%d %H:%M:%S", time.localtime(sh["ts"]))
+                d1 = sh.get("d1m")
+                d1_txt = "" if d1 is None else f" 1分钟 {d1 * 100:+.2f}% / 门槛 {(sh.get('gate') or 0) * 100:.2f}%"
+                print(f"  {t} {sh['symbol']} 跳 {sh['jump'] * 100:+.2f}% ${sh['notional']:,.0f} → {sh['status']}"
+                      f"（之后 {sh['n_after']} 笔，保留 {(sh.get('retain') or 0) * 100:.0f}%）{d1_txt}")
+    finally:
+        st.close_sync()
+    return 0
+
+
 # ---- 长桥 ----
 def cmd_lb_check(args: argparse.Namespace) -> int:
     """接通长桥时逐项核对：凭据、夜盘名单、K 线时间戳与时段、推送是否覆盖盘前/盘后/夜盘。"""
@@ -594,6 +625,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--username")
     p = add("report", cmd_report, "打印最近 24 小时日报")
     p.add_argument("--send", action="store_true")
+    p = add("tick-report", cmd_tick_report, "单笔冲涨跌（影子模式）报告")
+    p.add_argument("--days", type=int, default=7)
+    p.add_argument("--show", action="store_true", help="列出每次跳价")
     p = add("lb-check", cmd_lb_check, "接通长桥时的逐项检查")
     p.add_argument("--symbol")
     p.add_argument("--listen", type=int, default=150)

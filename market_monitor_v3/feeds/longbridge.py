@@ -129,6 +129,9 @@ class LongbridgeFeed:
         self._buffering = False
         self._buffer: list[Bar] = []
         self._trades = TradeBarBuilder()
+        # V4 P2：逐笔层的入口（None = 不订逐笔，除非 bar_source = trades）
+        self.on_tick: Callable[[Any], None] | None = None
+        self.ticks = 0
         self._naive_tz = ZoneInfo(self.lb.naive_tz)
         self._last_daily: date | None = None
 
@@ -217,7 +220,40 @@ class LongbridgeFeed:
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=self._naive_tz)
             sess = map_session(self.sdk, getattr(t, "trade_session", None))
-            self._trades.add(symbol.upper(), dt.timestamp(), float(t.price), float(t.volume), sess)
+            if self.cfg.bar_source == "trades":
+                self._trades.add(symbol.upper(), dt.timestamp(), float(t.price), float(t.volume), sess)
+            if self.on_tick is not None:
+                from ..ticks import Trade
+
+                self.ticks += 1
+                try:
+                    self.on_tick(
+                        Trade(
+                            symbol.upper(),
+                            dt.timestamp(),
+                            float(t.price),
+                            float(t.volume),
+                            self.trade_side(getattr(t, "direction", None)),
+                            sess or "",
+                        )
+                    )
+                except Exception:  # noqa: BLE001
+                    log.exception("长桥逐笔处理出错 %s", symbol)
+
+    def trade_side(self, value: Any) -> int:
+        """长桥逐笔的方向（TradeDirection：Up = 主动买，Down = 主动卖，Neutral）。接通时用 lb-check 核对。"""
+        td = getattr(self.sdk, "TradeDirection", None)
+        if td is not None:
+            if value is getattr(td, "Up", object()) or value == getattr(td, "Up", object()):
+                return 1
+            if value is getattr(td, "Down", object()) or value == getattr(td, "Down", object()):
+                return -1
+        name = str(value).lower()
+        if name.endswith("up") or name in ("1", "buy"):
+            return 1
+        if name.endswith("down") or name in ("2", "sell"):
+            return -1
+        return 0
 
     def flush_trades(self, now: float) -> None:
         """bar_source = trades 时由运行时每秒调用。"""
@@ -264,10 +300,10 @@ class LongbridgeFeed:
             if self.lb.subscribe_quotes:
                 ctx.set_on_quote(self._cb_quote)
                 await ctx.subscribe(self.symbols, [sdk.SubType.Quote])
-            if self.cfg.bar_source == "trades":
+            if self.cfg.bar_source == "trades" or self.on_tick is not None:
                 ctx.set_on_trades(self._cb_trades)
                 await ctx.subscribe(self.symbols, [sdk.SubType.Trade])
-            else:
+            if self.cfg.bar_source != "trades":
                 ctx.set_on_candlestick(self._cb_candle)
                 for sym in self.symbols:
                     await ctx.subscribe_candlesticks(sym, sdk.Period.Min_1, sdk.TradeSessions.All)

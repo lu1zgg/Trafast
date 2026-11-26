@@ -52,6 +52,10 @@ class Engine:
         # V4 类型开关：目标（"*"、标的代码、"group:分组名"）→ 关掉的类型。存在 kv 表 types_off
         self.types_off: dict[str, list[str]] = {}
         self.custom = CustomAlerts()
+        # V4 P2：逐笔层给的大单流向 (净额, 相对常态的倍数)；没有逐笔时为 None
+        self.flow: Callable[[str, int], tuple[float, float] | None] | None = None
+        self.flow_mult = cfg.ticks.flow_mult
+        self.flow_tag = cfg.ticks.flow_tag
         self.stats: Counter[str] = Counter()
         self.last_bar_at: dict[str, float] = {}
         self._last_eval: dict[str, tuple[int, bool]] = {}
@@ -179,12 +183,30 @@ class Engine:
             # 窗口里不留这根坏价，否则下一根“回到原价”会被当成反向异动，5/15 分钟窗口也会被污染 15 分钟
             pc = h.get(bar.ts - 60).c
             h.add(replace(bar, o=pc, h=pc, l=pc, c=pc))
+        if ev.candidate is not None and self.flow is not None:
+            self._tag_flow(ev.candidate)
         self._last_eval[sym] = (bar.ts, ev.candidate is not None)
         self.episodes.on_bar(bar, ev, now)
         if self.custom.rules:
             self.custom.on_bar(h.get(bar.ts) or bar, h, now, self._emit_custom)
         else:
             self.custom.observe(bar)
+
+    def _tag_flow(self, cand) -> None:  # noqa: ANN001
+        """大单流向只做证据：记进 reason；≥ 常态 flow_mult 倍且和价格同向时打标签。不改变触发和级别。"""
+        assert self.flow is not None
+        try:
+            got = self.flow(cand.symbol, cand.close_ts)
+        except Exception:  # noqa: BLE001
+            log.exception("查询大单流向出错：%s", cand.symbol)
+            return
+        if got is None:
+            return
+        net, ratio = got
+        cand.reason["flow_net"] = net
+        cand.reason["flow_ratio"] = ratio
+        if self.flow_tag and abs(ratio) >= self.flow_mult and net * cand.direction > 0:
+            cand.tags.append("big_buy" if net > 0 else "big_sell")
 
     def _emit_custom(self, rule, msg) -> None:  # noqa: ANN001
         self.sink.out(msg)

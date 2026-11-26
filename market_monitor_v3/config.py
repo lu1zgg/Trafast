@@ -28,7 +28,7 @@ SESSION_LABELS = {
     "CWE": "周末",
     "CLOSED": "休市",
 }
-RULE_MAJOR = "v4.0"
+RULE_MAJOR = "v4.1"
 
 Triple = tuple[float, float, float]
 
@@ -415,6 +415,37 @@ DEFAULT_GROUPS: dict[str, list[str]] = {
 }
 
 
+class TicksCfg(_M):
+    """V4 P2 逐笔层。逐笔不落库，只落每分钟摘要和单笔成交额直方图。"""
+
+    enabled: bool = True
+    crypto: bool = True  # Binance aggTrade
+    stocks: bool = True  # 长桥逐笔（接通后核对方向字段）
+    # 单笔冲涨跌：本版本只影子运行（只记录不推送）
+    shadow: bool = True
+    jump_min_pct: float = Field(1.0, gt=0, le=20)
+    jump_floor_mult: float = Field(2.0, ge=0, le=10)  # × 该时段 1 分钟地板
+    jump_notional_mult: float = Field(5.0, ge=0)  # × 单笔成交额中位数，挡掉零股
+    accept_s: float = Field(20, ge=1, le=120)
+    accept_min_trades: int = Field(3, ge=1)
+    accept_retain: float = Field(0.6, gt=0, le=1)
+    # 大单和大单流向
+    big_quantile: float = Field(0.99, gt=0.5, lt=1)
+    big_days_crypto: int = Field(14, ge=1, le=30)
+    big_sessions_us: int = Field(20, ge=1, le=30)
+    min_trades: int = Field(2000, ge=100)  # 直方图至少这么多笔才算大单门槛
+    flow_window_min: int = Field(5, ge=1, le=30)
+    flow_mult: float = Field(3.0, gt=0)
+    flow_min_samples: int = Field(360, ge=10)  # 5 分钟净额样本（每分钟一个）够这么多才有常态
+    flow_tag: bool = True  # 卡片上显示“大单净买入 / 净卖出”
+
+    @model_validator(mode="after")
+    def _shadow_only(self) -> "TicksCfg":
+        if not self.shadow:
+            raise ValueError("单笔冲涨跌在本版本只支持影子模式，请保持 ticks.shadow = true")
+        return self
+
+
 class WeekendPerpCfg(_M):
     enabled: bool = False  # louis 决定关闭；本版本未实现该模块
 
@@ -435,6 +466,7 @@ class AppConfig(_M):
     tradingview: TradingViewCfg = Field(default_factory=TradingViewCfg)
     web: WebCfg = Field(default_factory=WebCfg)
     trend: TrendCfg = Field(default_factory=TrendCfg)
+    ticks: TicksCfg = Field(default_factory=TicksCfg)
     # 自选分组：分组名 → 标的（写简称即可，如 NVDA、BTC）。只影响联动标题、统计和按分组开关类型，不影响触发
     groups: dict[str, list[str]] = Field(default_factory=lambda: {k: list(v) for k, v in DEFAULT_GROUPS.items()})
 
@@ -528,6 +560,7 @@ class Params:
             "merge": cfg.merge.model_dump(mode="json"),
             "overnight": cfg.stocks.overnight,
             "groups": {k: sorted(v) for k, v in sorted(cfg.groups.items())},
+            "ticks": cfg.ticks.model_dump(mode="json"),
         }
         h = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:8]
         return f"{RULE_MAJOR}-{self.label}-{h}"

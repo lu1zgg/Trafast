@@ -1,6 +1,7 @@
 """每日报告（默认北京时间 09:05，美股盘后刚结束）。在存储线程里执行。"""
 from __future__ import annotations
 
+import json
 import math
 from collections import defaultdict
 from datetime import datetime
@@ -174,6 +175,26 @@ def build_daily_report(store: Store, cfg: AppConfig, params: Params, cal: UsCale
     lines.append(
         f"投递：失败 {bad['failed']}，过期 {bad['expired']}，未知 {bad['unknown']}，放弃 {bad['dropped']}；重启 {restarts} 次"
     )
+
+    # V4 P2 单笔冲涨跌影子记录（只记录不推送）
+    if cfg.ticks.enabled:
+        from .tick_report import report_lines, summarize
+
+        shadows = [
+            json.loads(r["data"])
+            for r in c.execute("SELECT data FROM tick_shadow WHERE ts>=? AND ts<? ORDER BY ts", (start, end))
+        ]
+        if shadows:
+            signals = [
+                json.loads(r["data"])
+                for r in c.execute(
+                    "SELECT data FROM signals WHERE kind='open' AND ts>=? AND ts<?", (int(start) - 600, int(end) + 600)
+                )
+            ]
+            covered = {
+                r["symbol"] for r in c.execute("SELECT DISTINCT symbol FROM tick_1m WHERE ts>=? AND ts<?", (int(start), int(end)))
+            }
+            lines += report_lines(summarize(shadows, signals, covered))
 
     fb = {
         r["value"]: r["n"]

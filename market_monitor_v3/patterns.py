@@ -35,7 +35,7 @@ PATTERN_NAMES = {
     "spike": ("急拉", "急跌"),
     "trend": ("持续上涨", "持续下跌"),
 }
-TAG_LABELS = {"vol": "放量"}
+TAG_LABELS = {"vol": "放量", "big_buy": "大单净买入", "big_sell": "大单净卖出"}
 # /types 和网页后台接受的写法 → 类型
 PATTERN_ALIASES = {
     **{p: p for p in PATTERNS},
