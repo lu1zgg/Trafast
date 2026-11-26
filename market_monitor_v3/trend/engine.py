@@ -15,6 +15,7 @@ from typing import Any
 
 from ..models import Bar, OutMsg, display_name, market_of
 from ..render import feedback_buttons
+from .breakout import BreakoutWatch, LevelBreak, break_text
 from .buckets import Bucketer, UsRegularBucketer, UtcBucketer
 from .levels import Levels
 from .machine import SymbolTrend, TrendEvent, TrendParams
@@ -77,6 +78,8 @@ class TrendEngine:
         self.pending: dict[str, list[Bar]] = {s: [] for s in self.machines}
         self._eff = TrendEffects()
         self._quiet = False  # 静默回放中：不推送、不记事件
+        self.breakouts = BreakoutWatch()  # V4 P3 关键位突破
+        self.level_breaks = True
 
     def bucketer(self, symbol: str) -> Bucketer:
         return self._us if market_of(symbol) == "US" else self._utc
@@ -193,9 +196,13 @@ class TrendEngine:
         m = self.machines[sym]
         if store:
             self._eff.candles.append((sym, k))
+        before = m.levels() if (self.level_breaks and not self._quiet and m.tf1.state is not None) else None
         evs = m.on_candle15(k)
         for ev in evs:
             self._handle(sym, ev, now)
+        if self.level_breaks and not self._quiet:
+            for br in self.breakouts.on_candle(sym, before, k.c, k.end):
+                self._level_break(br, now)
         if evs and not self._quiet:
             self._eff.states[sym] = self.state_json(sym)
 
@@ -247,6 +254,31 @@ class TrendEngine:
                     market=market,
                 )
             )
+
+    def _level_break(self, br: LevelBreak, now: float) -> None:
+        self._eff.events.append((br.t, br.symbol, "level", br.d, br.price, br.to_json()))
+        if now - br.t > STALE_S or self.is_muted(br.symbol, now):
+            return
+        key = f"trend-level:{br.symbol}:{br.t}:{br.d}"
+        self.out(
+            OutMsg(
+                key=key,
+                kind="send",
+                text=break_text(br),
+                created_at=now,
+                expires_at=now + STALE_S,
+                buttons=feedback_buttons(key) if self.buttons else None,
+                market=market_of(br.symbol),
+                direction=br.d,
+            )
+        )
+
+    def note_crossing(self, sym: str, lo: float, hi: float, d: int, t: float) -> None:
+        """价格异动的卡片已经写了穿过这个强位：4 小时内不再单独推关键位突破。"""
+        self.breakouts.note(sym, lo, hi, d, t)
+        pend = self.breakouts.pending.get(sym)
+        if pend:
+            self.breakouts.pending[sym] = [p for p in pend if not (p.d == d and p.zone.lo <= hi and p.zone.hi >= lo)]
 
     # ---- 落库 ----
     def state_json(self, sym: str) -> dict[str, Any]:

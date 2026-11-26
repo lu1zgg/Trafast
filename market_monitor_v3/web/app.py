@@ -48,6 +48,7 @@ NAV = [
     ("/rules", "规则"),
     ("/trend", "趋势"),
     ("/signals", "类型与提醒"),
+    ("/apikeys", "API 密钥"),
     ("/channels", "推送渠道"),
     ("/tradingview", "TradingView"),
     ("/system", "系统"),
@@ -67,6 +68,8 @@ AUDIT_LABELS = {
     "types": "类型开关",
     "alert": "添加提醒",
     "unalert": "删除提醒",
+    "apikey": "生成 API 密钥",
+    "apikey_revoke": "吊销 API 密钥",
 }
 
 
@@ -77,6 +80,11 @@ class WebPaths:
     auth: Path
     history: Path
     audit: Path
+    api_keys: Path | None = None  # 默认和 web-auth.json 放在一起：api-keys.json
+
+    @property
+    def api_keys_path(self) -> Path:
+        return self.api_keys or self.auth.parent / "api-keys.json"
 
 
 class Audit:
@@ -231,6 +239,10 @@ def create_app(paths: WebPaths, control_socket: str | None = None, fail_delay_s:
         nav=NAV, version=__version__, fmt_ts=_fmt_ts, ago=_ago, dur=_dur, labels=SESSION_LABELS, name=display_name, nums=_nums, pcts=_pcts,
     )
     app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
+    from ..apikeys import ApiKeyStore
+    from .api import mount_api
+
+    api_keys = ApiKeyStore(paths.api_keys_path)
 
     # ---- 通用 ----
     @app.middleware("http")
@@ -326,6 +338,8 @@ def create_app(paths: WebPaths, control_socket: str | None = None, fail_delay_s:
 
     def load() -> tuple[str, Any, AppConfig]:
         return cfg_file.read()
+
+    mount_api(app, api_keys, monitor)
 
     @app.exception_handler(HTTPException)
     async def http_exc(request: Request, exc: HTTPException) -> Response:
@@ -704,6 +718,47 @@ def create_app(paths: WebPaths, control_socket: str | None = None, fail_delay_s:
             audit.log(s.username, client_ip(request), "unalert", rid)
             flash(s, f"已删除 {res.get('removed', 0)} 条")
         return RedirectResponse("/signals", status_code=303)
+
+    # ---- API 密钥（桌面版等客户端） ----
+    @app.get("/apikeys", response_class=HTMLResponse)
+    async def apikeys_page(request: Request) -> Response:
+        s = need_login(request)
+        new_key = getattr(s, "new_api_key", None)
+        s.new_api_key = None
+        return page(
+            request, s, "apikeys.html", keys=sorted(api_keys.list(), key=lambda k: -k.id), new_key=new_key,
+            base=str(request.base_url).rstrip("/"),
+        )
+
+    @app.post("/apikeys/create")
+    async def apikeys_create(request: Request) -> Response:
+        s = need_login(request)
+        form = await form_checked(request, s)
+        scope = "read" if str(form.get("scope")) == "read" else "write"
+        try:
+            rec, key = api_keys.create(str(form.get("name") or ""), scope)
+        except (OSError, ValueError) as e:
+            flash(s, f"没有生成：{e}", "err")
+            return RedirectResponse("/apikeys", status_code=303)
+        s.new_api_key = (rec.name, key)
+        audit.log(s.username, client_ip(request), "apikey", f"#{rec.id} {rec.name} {scope}")
+        await monitor("ops", text=f"生成了 API 密钥 #{rec.id}（{rec.name}，{scope}）")
+        return RedirectResponse("/apikeys", status_code=303)
+
+    @app.post("/apikeys/revoke")
+    async def apikeys_revoke(request: Request) -> Response:
+        s = need_login(request)
+        form = await form_checked(request, s)
+        try:
+            kid = int(str(form.get("id") or "0"))
+        except ValueError:
+            kid = 0
+        if api_keys.revoke(kid):
+            audit.log(s.username, client_ip(request), "apikey_revoke", f"#{kid}")
+            flash(s, f"已吊销 #{kid}，已连着的客户端几秒内断开")
+        else:
+            flash(s, "没有这个密钥或已经吊销", "err")
+        return RedirectResponse("/apikeys", status_code=303)
 
     # ---- 推送渠道 ----
     def _route_form(t: Table, form: Any, prefix: str) -> None:

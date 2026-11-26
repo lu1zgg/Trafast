@@ -176,6 +176,17 @@ def build_daily_report(store: Store, cfg: AppConfig, params: Params, cal: UsCale
         f"投递：失败 {bad['failed']}，过期 {bad['expired']}，未知 {bad['unknown']}，放弃 {bad['dropped']}；重启 {restarts} 次"
     )
 
+    # V4 P3 异动统计（按级别加权的多空比）
+    from .stats import build_stats, tally_lines
+
+    sigs = [
+        json.loads(r["data"])
+        for r in c.execute("SELECT data FROM signals WHERE ts>=? AND ts<? ORDER BY ts", (int(start), int(end)))
+    ]
+    st = build_stats(sigs, end, cfg.groups_of)
+    if st["today"]["total"]["up_n"] or st["today"]["total"]["down_n"]:
+        lines.append("多空（括号里按级别加权）：")
+        lines += ["  " + x for x in tally_lines(st["today"], top_groups=5)]
     # V4 P2 单笔冲涨跌影子记录（只记录不推送）
     if cfg.ticks.enabled:
         from .tick_report import report_lines, summarize

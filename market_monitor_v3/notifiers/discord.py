@@ -232,6 +232,7 @@ SLASH_COMMANDS: list[dict[str, Any]] = [
     {"name": "params", "description": "当前触发门槛"},
     {"name": "mutes", "description": "当前静音列表"},
     {"name": "report", "description": "立即生成最近 24 小时日报"},
+    {"name": "stats", "description": "异动统计：最近 30 分钟和今天的涨跌异动数和多空比"},
     {"name": "help", "description": "命令说明"},
     {
         "name": "trend",

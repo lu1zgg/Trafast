@@ -432,6 +432,51 @@ def cmd_web_passwd(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_api_key(args: argparse.Namespace) -> int:
+    """API 密钥：create / list / revoke。文件归网页后台用户（mmweb）所有。"""
+    from .apikeys import ApiKeyStore
+
+    store = ApiKeyStore(args.file)
+    if args.action == "create":
+        try:
+            rec, key = store.create(args.name or "", args.scope)
+        except (OSError, ValueError) as e:
+            print(f"没有生成：{e}", file=sys.stderr)
+            return 1
+        _chown_like_web(Path(args.file))
+        print(f"已生成 #{rec.id}（{rec.name}，{'读写' if rec.scope == 'write' else '只读'}）。密钥只显示这一次：\n\n{key}\n")
+        return 0
+    if args.action == "revoke":
+        if not args.id or not args.id.isdigit():
+            print("用法：mm api-key revoke 编号", file=sys.stderr)
+            return 1
+        ok = store.revoke(int(args.id))
+        _chown_like_web(Path(args.file))
+        print("已吊销" if ok else "没有这个密钥或已经吊销")
+        return 0 if ok else 1
+    keys = store.list()
+    if not keys:
+        print("还没有 API 密钥。生成：mm api-key create --name 我的Mac")
+    for k in keys:
+        used = time.strftime("%m-%d %H:%M", time.localtime(k.last_used_at)) if k.last_used_at else "从未使用"
+        state = "有效" if k.active else "已吊销"
+        print(f"#{k.id}  {k.name}  tfk_{k.prefix}…  {k.scope}  {state}  最后使用 {used}")
+    return 0
+
+
+def _chown_like_web(path: Path) -> None:
+    """以 root 运行时把文件属主改成网页后台用户，让后台能读写。"""
+    if os.geteuid() != 0 or not path.exists():
+        return
+    try:
+        import pwd
+
+        pw = pwd.getpwnam("mmweb")
+        os.chown(path, pw.pw_uid, pw.pw_gid)
+    except (KeyError, OSError):
+        pass
+
+
 def cmd_report(args: argparse.Namespace) -> int:
     from .app import make_calendar
     from .render import to_plain
@@ -625,6 +670,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--username")
     p = add("report", cmd_report, "打印最近 24 小时日报")
     p.add_argument("--send", action="store_true")
+    p = add("api-key", cmd_api_key, "对外 API 密钥（桌面版用）：create / list / revoke")
+    p.add_argument("action", choices=["create", "list", "revoke"])
+    p.add_argument("id", nargs="?", default="")
+    p.add_argument("--name", default="")
+    p.add_argument("--scope", choices=["write", "read"], default="write")
+    p.add_argument("--file", default=os.environ.get("MONITOR_API_KEYS", "/etc/market-monitor/api-keys.json"))
     p = add("tick-report", cmd_tick_report, "单笔冲涨跌（影子模式）报告")
     p.add_argument("--days", type=int, default=7)
     p.add_argument("--show", action="store_true", help="列出每次跳价")

@@ -622,6 +622,48 @@ class Store:
         ).fetchall()
         return [json.loads(r["data"]) for r in rows]
 
+    # ---- V4 P3 对外 API ----
+    def api_signals(self, after: int, limit: int, symbol: str | None = None, since: int = 0) -> list[dict[str, Any]]:
+        """按写入顺序（rowid）取信号，after 是上次拿到的最后一个 seq。"""
+        q = "SELECT rowid AS seq, data FROM signals WHERE rowid>? AND ts>=?"
+        args: list[Any] = [after, since]
+        if symbol:
+            q += " AND symbol=?"
+            args.append(symbol)
+        rows = self.c.execute(q + " ORDER BY rowid LIMIT ?", [*args, limit]).fetchall()
+        return [{"seq": r["seq"], **json.loads(r["data"])} for r in rows]
+
+    def api_signals_latest(self, limit: int, symbol: str | None = None) -> list[dict[str, Any]]:
+        q = "SELECT rowid AS seq, data FROM signals"
+        args: list[Any] = []
+        if symbol:
+            q += " WHERE symbol=?"
+            args.append(symbol)
+        rows = self.c.execute(q + " ORDER BY rowid DESC LIMIT ?", [*args, limit]).fetchall()
+        return [{"seq": r["seq"], **json.loads(r["data"])} for r in reversed(rows)]
+
+    def max_signal_seq(self) -> int:
+        r = self.c.execute("SELECT MAX(rowid) AS m FROM signals").fetchone()
+        return int(r["m"] or 0)
+
+    def bars_last(self, symbol: str, limit: int) -> list[Bar]:
+        rows = self.c.execute(
+            "SELECT * FROM bars_1m WHERE symbol=? AND synthetic=0 ORDER BY ts DESC LIMIT ?", (symbol, limit)
+        ).fetchall()
+        return [bar_from_row(r) for r in reversed(rows)]
+
+    def trend_bars_last(self, symbol: str, limit: int) -> list[tuple]:
+        rows = self.c.execute(
+            "SELECT ts, end_ts, o, h, l, c, v FROM trend_bars WHERE symbol=? ORDER BY ts DESC LIMIT ?", (symbol, limit)
+        ).fetchall()
+        return [tuple(r) for r in reversed(rows)]
+
+    def episode_root(self, episode_id: str) -> str | None:
+        r = self.c.execute("SELECT data FROM episodes WHERE id=?", (episode_id,)).fetchone()
+        if r is None:
+            return None
+        return json.loads(r["data"]).get("root_key")
+
     # ---- V4 P2 逐笔层 ----
     def tick_save(self, minutes: list[Any], shadows: list[Any], hists: list[tuple[str, str, str, list[int]]]) -> None:
         with self.c:

@@ -28,7 +28,7 @@ SESSION_LABELS = {
     "CWE": "周末",
     "CLOSED": "休市",
 }
-RULE_MAJOR = "v4.1"
+RULE_MAJOR = "v4.2"
 
 Triple = tuple[float, float, float]
 
@@ -374,6 +374,7 @@ class TrendCfg(_M):
     sr_half_life_d: float = Field(15, gt=0, le=120)
     sr_vp_days: float = Field(10, gt=0, le=60)
     sr_show: int = Field(2, ge=1, le=4)  # 推送里上下各列几个强位
+    level_breaks: bool = True  # V4：15m 收盘突破 / 跌破强位并站稳 2 根时单独推送（走趋势消息的订阅）
     # 数据
     history_days: int = Field(130, ge=40, le=365)  # 启动时补齐多少天的 15m 历史
 

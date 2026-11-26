@@ -169,6 +169,7 @@ sr_tol_atr = 0.4
 sr_half_life_d = 15
 sr_vp_days = 10
 sr_show = 2                     # 推送里上下各列几个强位
+level_breaks = true             # 15m 收盘突破 / 跌破强位、下一根仍在外面时单独推（4 小时内同一区间不重复）
 
 [calendar]
 extra_holidays = []             # 内置 2026–2027 NYSE 休市日；接通长桥后每天按交易所刷新

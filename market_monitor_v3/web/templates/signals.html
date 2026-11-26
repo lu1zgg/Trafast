@@ -65,7 +65,7 @@
     <div class="field">
       <label for="f-rule">新提醒</label>
       <input type="text" id="f-rule" name="rule" placeholder="NVDA > 140" autocomplete="off" required>
-      <div class="hint">写法和群里的 /alert 一样：<code>NVDA &gt; 140</code>（上穿）、<code>NVDA &lt; 120</code>（下穿）、<code>BTC 5m -2%</code>（5 分钟跌 2%，±2% 涨跌都算）、<code>NVDA 当日 5%</code>、<code>MU 5m $20M</code>（成交额）。末尾可加 once / daily / always，以及 touch（触价即推，默认收盘确认）。</div>
+      <div class="hint">写法和群里的 /alert 一样：<code>NVDA &gt; 140</code>（上穿）、<code>NVDA &lt; 120</code>（下穿）、<code>BTC 5m -2%</code>（5 分钟跌 2%，±2% 涨跌都算）、<code>NVDA 当日 5%</code>、<code>MU 5m $20M</code>（成交额）；指标：<code>BTC 1h ema 20 50 金叉</code>、<code>NVDA 15m rsi &gt; 70</code>、<code>BTC 1h macd 死叉</code>、<code>ETH 15m boll 上</code>。末尾可加 once / daily / always，以及 touch（触价即推，默认收盘确认）。</div>
     </div>
     <div class="buttons"><button type="submit"{% if alerts is none %} disabled{% endif %}>添加</button></div>
   </form>
