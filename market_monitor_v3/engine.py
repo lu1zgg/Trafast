@@ -56,6 +56,8 @@ class Engine:
         self.flow: Callable[[str, int], tuple[float, float] | None] | None = None
         self.flow_mult = cfg.ticks.flow_mult
         self.flow_tag = cfg.ticks.flow_tag
+        # V4 P3：趋势监控的强位（价格异动穿过强位时卡片加一行）
+        self.levels_of: Callable[[str], object | None] | None = None
         self.stats: Counter[str] = Counter()
         self.last_bar_at: dict[str, float] = {}
         self._last_eval: dict[str, tuple[int, bool]] = {}
@@ -185,6 +187,8 @@ class Engine:
             h.add(replace(bar, o=pc, h=pc, l=pc, c=pc))
         if ev.candidate is not None and self.flow is not None:
             self._tag_flow(ev.candidate)
+        if ev.candidate is not None and self.levels_of is not None:
+            self._tag_level(ev.candidate)
         self._last_eval[sym] = (bar.ts, ev.candidate is not None)
         self.episodes.on_bar(bar, ev, now)
         if self.custom.rules:
@@ -207,6 +211,22 @@ class Engine:
         cand.reason["flow_ratio"] = ratio
         if self.flow_tag and abs(ratio) >= self.flow_mult and net * cand.direction > 0:
             cand.tags.append("big_buy" if net > 0 else "big_sell")
+
+    def _tag_level(self, cand) -> None:  # noqa: ANN001
+        from .trend.breakout import crossing
+
+        assert self.levels_of is not None
+        try:
+            z = crossing(self.levels_of(cand.symbol), cand.primary.p0, cand.price, cand.direction)  # type: ignore[arg-type]
+        except Exception:  # noqa: BLE001
+            log.exception("查询强位出错：%s", cand.symbol)
+            return
+        if z is None:
+            return
+        cand.tags.append("level")
+        cand.reason["lvl_lo"] = z.lo
+        cand.reason["lvl_hi"] = z.hi
+        cand.reason["lvl_stars"] = float(len(z.stars()))
 
     def _emit_custom(self, rule, msg) -> None:  # noqa: ANN001
         self.sink.out(msg)

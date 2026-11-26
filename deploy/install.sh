@@ -59,10 +59,12 @@ else
     chmod 600 "$ETC/secrets.env"
     echo "   $ETC/secrets.env 已存在，保留"
 fi
-if [ -f "$ETC/web-auth.json" ]; then
-    chown mmweb:monitor "$ETC/web-auth.json"
-    chmod 600 "$ETC/web-auth.json"
-fi
+for f in web-auth.json api-keys.json; do
+    if [ -f "$ETC/$f" ]; then
+        chown mmweb:monitor "$ETC/$f"
+        chmod 600 "$ETC/$f"
+    fi
+done
 
 echo "==> systemd 服务和 mm 命令"
 sed "s#/opt/market-monitor#$SRC#g" "$SRC/deploy/market-monitor.service" >/etc/systemd/system/market-monitor.service

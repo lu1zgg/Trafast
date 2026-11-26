@@ -47,10 +47,11 @@
     <tr>
       <td class="small">{{ fmt_ts(e.ts) }}</td>
       <td>{{ name(e.symbol) }}</td>
-      <td>{% if e.kind == 'formed' %}<span class="{{ 'up' if e.d > 0 else 'down' }}">{{ '上涨' if e.d > 0 else '下跌' }}趋势形成</span>{% else %}{{ '上涨' if e.d > 0 else '下跌' }}趋势结束{% endif %}</td>
+      <td>{% if e.kind == 'formed' %}<span class="{{ 'up' if e.d > 0 else 'down' }}">{{ '上涨' if e.d > 0 else '下跌' }}趋势形成</span>{% elif e.kind == 'level' %}<span class="{{ 'up' if e.d > 0 else 'down' }}">{{ '突破压力区' if e.d > 0 else '跌破支撑区' }}</span>{% else %}{{ '上涨' if e.d > 0 else '下跌' }}趋势结束{% endif %}</td>
       <td class="num mono">${{ '{:,.2f}'.format(e.price) }}</td>
       <td class="small">
         {% if e.kind == 'formed' %}{{ dd.grade }} 级，失效位 ${{ '{:,.2f}'.format(dd.stop) }}{% if dd.quiet %}，<span class="muted">未推送：{{ dd.quiet }}</span>{% endif %}
+        {% elif e.kind == 'level' %}${{ '{:,.2f}'.format(dd.lo) }}–{{ '{:,.2f}'.format(dd.hi) }} {{ dd.stars }} {{ dd.src }}
         {% else %}{{ '跌破/突破失效位' if dd.reason == 'stop' else '动能反转' }}，形成后 {{ '%+.1f'|format((e.price / dd.entry_price - 1) * 100 if dd.entry_price else 0) }}%{% endif %}
       </td>
     </tr>

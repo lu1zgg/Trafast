@@ -245,6 +245,9 @@ class Runtime:
                 buttons=cfg.telegram.feedback_buttons or cfg.discord.feedback_buttons,
                 show=cfg.trend.sr_show,
             )
+        if self.trend is not None:
+            self.trend.level_breaks = cfg.trend.level_breaks
+            self.engine.levels_of = self.trend.levels
         await self._restore()
         await self._start_ticks()
 
@@ -333,11 +336,23 @@ class Runtime:
             log.warning("kv types_off 无法解析，忽略")
             self.engine.types_off = {}
         self.engine.custom.set_rules(await self.store.call(Store.custom_rules))
+        await self._seed_indicator_series()
         today_et = datetime.fromtimestamp(now, ET).replace(hour=0, minute=0, second=0, microsecond=0)
         for sym in self.cfg.all_symbols():
             if market_of(sym) == "US":
                 ref = await self.store.call(Store.last_close, sym, "REG", int(today_et.timestamp()))
                 self.engine.custom.seed_ref(sym, ref)
+
+    async def _seed_indicator_series(self, only: str | None = None) -> None:
+        """指标提醒要几天的 1 分钟历史（例如 1h EMA50 要 150 小时）：从库里补。美股有休市时段，多取一倍。"""
+        assert self.engine is not None
+        now = int(self.clock())
+        for sym, mins in self.engine.custom.needs_series().items():
+            if only and sym != only:
+                continue
+            since = now - min(mins * 60 * 2, self.cfg.storage.bars_days * 86400)
+            bars = await self.store.call(Store.load_recent_bars, sym, since)
+            self.engine.custom.seed_series(sym, bars)
 
     async def recompute_baselines(self, symbols: list[str]) -> None:
         now = self.clock()
@@ -369,6 +384,12 @@ class Runtime:
         eff = self.sink.drain()
         if eff.empty():
             return
+        if self.trend is not None:
+            # 推送出去的价格异动已经写了穿过某个强位：4 小时内不再单独推这个关键位突破
+            for sig in eff.signals:
+                r = sig.reason or {}
+                if sig.kind == "open" and "level" in sig.tags and r.get("lvl_lo") is not None:
+                    self.trend.note_crossing(sig.symbol, r["lvl_lo"], r["lvl_hi"], sig.direction, sig.ts)
         await self.store.call(Store.apply_effects, eff)
         if eff.outs:
             self.notify_senders()
@@ -644,6 +665,8 @@ class Runtime:
         rule.created_by, rule.created_at = by, self.clock()
         await self.store.call(Store.custom_add, rule)
         self.engine.custom.rules[rule.id] = rule
+        if rule.kind == "indicator":
+            await self._seed_indicator_series(rule.symbol)
         return f"已添加自定义提醒 #{rule.id}：{html.escape(rule.describe())}"
 
     async def remove_alert(self, rule_id: int | None) -> int:
@@ -844,6 +867,7 @@ class Runtime:
             self.ticks.params = self.params
         if self.trend is not None:
             self.trend.set_params(new.trend.params(), new.trend.sr_show)
+            self.trend.level_breaks = new.trend.level_breaks
             self.trend.buttons = self.engine.merger.buttons
         self.health.cfg = new
         self.health.hc = new.health
@@ -912,7 +936,7 @@ class Runtime:
             ]}
         if cmd == "alert_add":
             text = str(req.get("text") or "").strip()
-            msg = await self.add_alert(text.split(), "web")
+            msg = await self.add_alert(text.split(), str(req.get("by") or "web"))
             ok = msg.startswith("已添加")
             return {"ok": ok, "message": html.unescape(msg)} if ok else {"ok": False, "error": html.unescape(msg)}
         if cmd == "alert_del":
@@ -945,7 +969,18 @@ class Runtime:
             if text:
                 await self.health.ops(f"web:{int(self.clock() * 1000)}", "🔐 后台：" + html.escape(text))
             return {"ok": True}
+        from . import api_backend
+
+        if cmd in api_backend.API_COMMANDS:
+            return await api_backend.handle(self, cmd, req)
         return {"ok": False, "error": f"未知命令 {cmd}"}
+
+    async def stats_text(self) -> str:
+        from .api_backend import stats_json
+        from .stats import stats_lines
+
+        st = await stats_json(self, self.clock())
+        return "\n".join(["<b>异动统计</b>（括号里按级别加权：L1 = 1，L2 = 2，L3 = 3）", *stats_lines(st)])
 
     async def tradingview_alert(self, alert: dict[str, Any]) -> dict[str, Any]:
         if not self.cfg.tradingview.enabled:

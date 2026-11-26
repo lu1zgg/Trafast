@@ -556,3 +556,19 @@ def test_channel_route_trend_checkbox(env):
     login(env)
     page = env["client"].get("/channels").text
     assert "趋势形成 / 结束" in page and '_trend"' in page
+
+
+def test_web_api_keys_page(env):
+    c = env["client"]
+    csrf = login(env)
+    r = c.post("/apikeys/create", data={"csrf": csrf, "name": "我的Mac", "scope": "write"})
+    assert r.status_code == 303
+    page = c.get("/apikeys").text
+    key = page.split('select-all">')[1].split("<")[0].strip()
+    assert key.startswith("tfk_") and "我的Mac" in page
+    assert "tfk_" + key[4:12] in c.get("/apikeys").text and key not in c.get("/apikeys").text  # 只显示一次
+    r = c.get("/api/v1/ping", headers={"Authorization": f"Bearer {key}"})
+    assert r.status_code == 200 and r.json()["key"]["name"] == "我的Mac"
+    c.post("/apikeys/revoke", data={"csrf": csrf, "id": "1"})
+    assert c.get("/api/v1/ping", headers={"Authorization": f"Bearer {key}"}).status_code == 401
+    assert (env["tmp"] / "api-keys.json").exists()

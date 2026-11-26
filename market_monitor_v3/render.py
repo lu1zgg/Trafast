@@ -170,6 +170,9 @@ def card_text(card: dict[str, Any]) -> str:
         why = reason_text(card["pattern"], card["direction"], card["k"], card["d"], card.get("reason") or {})
         if why:
             lines.append(esc(why))
+    lvl = level_line(card)
+    if lvl:
+        lines.append(lvl)
     if card["retained"] is None:
         lines.append("快速通道：位移很大，收盘即推")
     else:
@@ -197,6 +200,17 @@ def card_text(card: dict[str, Any]) -> str:
     if card.get("end"):
         lines.append(end_text(card["end"]))
     return "\n".join(lines)
+
+
+def level_line(card: dict[str, Any]) -> str:
+    """V4 P3：这段异动整个穿过了一个强支撑 / 压力区。"""
+    reason = card.get("reason") or {}
+    lo, hi = reason.get("lvl_lo"), reason.get("lvl_hi")
+    if "level" not in (card.get("tags") or []) or lo is None or hi is None:
+        return ""
+    word = "突破强压力区" if card["direction"] > 0 else "跌破强支撑区"
+    stars = "★" * int(reason.get("lvl_stars") or 1)
+    return f"{word} {usd(lo)}–{price(hi)} {stars}"
 
 
 def flow_line(card: dict[str, Any]) -> str:

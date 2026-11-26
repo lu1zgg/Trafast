@@ -30,6 +30,7 @@ HELP = """<b>可用命令</b>
 /alerts 自定义提醒列表；/unalert 编号|all 删除
 /report 立即生成最近 24 小时日报
 /trend [代码] 趋势状态；带代码看详情和支撑压力位，例如 /trend NVDA
+/stats 异动统计：最近 30 分钟和今天各市场、各分组的涨跌异动数和多空比
 /help 本说明
 告警和趋势消息下面的 👍/👎 用来标记这条有没有用，会进日报，帮助校准。"""
 
@@ -57,6 +58,7 @@ class BotHooks(Protocol):
     async def unmute(self, target: str | None) -> int: ...
     async def report_text(self) -> str: ...
     async def trend_text(self, args: list[str]) -> str: ...
+    async def stats_text(self) -> str: ...
     def types_text(self) -> str: ...
     def resolve_target(self, s: str) -> str | None: ...
     async def set_type(self, target: str, pattern: str, off: bool) -> None: ...
@@ -87,6 +89,8 @@ async def run_command(
         return await hooks.report_text()
     if cmd == "trend":
         return await hooks.trend_text(args)
+    if cmd == "stats":
+        return await hooks.stats_text()
     if cmd == "types":
         if not args:
             return hooks.types_text()

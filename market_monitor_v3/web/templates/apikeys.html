@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% from "_macros.html" import hidden, text %}
+{% block title %}API 密钥{% endblock %}
+{% block body %}
+<h1>API 密钥</h1>
+<p class="muted">桌面版和其他客户端用 API 密钥连这台服务器的 <code>/api/v1</code>。服务器只保存密钥的哈希，原文只在生成时显示一次。</p>
+
+{% if new_key %}
+<div class="flash warn">
+  <b>{{ new_key[0] }} 的密钥（只显示这一次，请马上复制到桌面版里）：</b>
+  <div class="mono wide select-all">{{ new_key[1] }}</div>
+</div>
+{% endif %}
+
+<div class="card">
+  <h2>连接信息</h2>
+  <p>服务器地址：<code>{{ base }}</code></p>
+  <p class="small muted">桌面版第一次打开时填这个地址和下面生成的密钥。只能通过 HTTPS 连接（地址是 127.0.0.1 时除外）。</p>
+</div>
+
+<div class="card">
+  <h2>已有密钥</h2>
+  {% if keys %}
+  <div class="table-wrap"><table>
+    <tr><th>#</th><th>名称</th><th>前缀</th><th>权限</th><th>生成</th><th>最后使用</th><th>状态</th><th></th></tr>
+    {% for k in keys %}
+    <tr>
+      <td class="mono">{{ k.id }}</td>
+      <td>{{ k.name }}</td>
+      <td class="mono">tfk_{{ k.prefix }}…</td>
+      <td>{{ "读写" if k.scope == "write" else "只读" }}</td>
+      <td>{{ fmt_ts(k.created_at) }}</td>
+      <td>{{ fmt_ts(k.last_used_at) if k.last_used_at else "—" }}</td>
+      <td>{% if k.active %}<span class="pill ok">有效</span>{% else %}<span class="pill">已吊销 {{ fmt_ts(k.revoked_at) }}</span>{% endif %}</td>
+      <td>{% if k.active %}<form method="post" action="/apikeys/revoke">{{ hidden(s) }}<input type="hidden" name="id" value="{{ k.id }}"><button type="submit" class="small">吊销</button></form>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table></div>
+  {% else %}
+  <p class="muted">还没有密钥。</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>生成新密钥</h2>
+  <form method="post" action="/apikeys/create">
+    {{ hidden(s) }}
+    {{ text("name", "", "名称", "例如 我的Mac、办公室Windows，方便以后吊销", "我的Mac", True) }}
+    <div class="field">
+      <label for="f-scope">权限</label>
+      <select id="f-scope" name="scope">
+        <option value="write" selected>读写：看信号，也能改自定义提醒、类型开关、静音和反馈（桌面版用这个）</option>
+        <option value="read">只读：只能看信号、行情和统计</option>
+      </select>
+    </div>
+    <div class="buttons"><button type="submit">生成</button></div>
+  </form>
+  <p class="small muted">也可以在服务器上用命令行：<code>sudo mm api-key create --name 我的Mac</code>、<code>sudo mm api-key list</code>、<code>sudo mm api-key revoke 3</code>。</p>
+</div>
+{% endblock %}

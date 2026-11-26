@@ -1,13 +1,13 @@
 #!/bin/sh
 # 运维命令包装：以 monitor 用户、带上 secrets.env 运行 monitor 子命令。
-# 用法：sudo mm status | sudo mm test-telegram | sudo mm test-discord | sudo mm web-passwd | sudo mm replay --days 7 …
+# 用法：sudo mm status | sudo mm test-telegram | sudo mm test-discord | sudo mm web-passwd | sudo mm api-key create --name 我的Mac | sudo mm replay --days 7 …
 set -e
 if [ "$(id -u)" != 0 ]; then
     echo "请用 sudo 运行：sudo mm $*" >&2
     exit 1
 fi
-if [ "$1" = "web-passwd" ]; then
-    # 后台账号文件归网页后台的服务账号 mmweb 所有，不需要其他密钥
+if [ "$1" = "web-passwd" ] || [ "$1" = "api-key" ]; then
+    # 后台账号和 API 密钥文件归网页后台的服务账号 mmweb 所有，不需要其他密钥
     cd /
     exec runuser -u mmweb -- /opt/market-monitor/.venv/bin/monitor "$@" --config /etc/market-monitor/config.toml
 fi

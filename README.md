@@ -21,6 +21,7 @@
 | 长桥数据源 | 代码写好，**还没接通真实账号**，接通步骤见下文 |
 | 趋势监控（15m / 1h / 4h，支撑压力位） | 完成，有单元测试；规则用 8 个月真实 K 线回测过，见下文 |
 | V4 逐笔层（大单流向标签、单笔冲涨跌影子记录） | 完成，有单元测试和模拟断线测试；Binance 逐笔还没在 VPS 上测 CPU，长桥逐笔等接通 |
+| V4 对外 API（/api/v1 + WebSocket，API 密钥）、关键位突破、异动统计、指标提醒 | 完成，有单元测试 |
 | 真实行情回放 | 还没做：开发环境连不上 Binance。部署后跑 `sudo mm replay` 看实际消息量 |
 
 ## 怎么判断异动（灵敏档）
@@ -253,7 +254,9 @@ Discord 里是同样的内容，放在左边带颜色竖条的卡片里（绿涨
 | `/trend`、`/trend NVDA` | 全部标的的趋势状态；带代码看单个标的的三个周期打分和支撑压力位 |
 | `/types`、`/types off 急拉急跌 [代码\|分组]`、`/types on ...` | 异动类型开关（V 反转、盘整突破、急拉急跌、持续推进），可按全部、标的或分组 |
 | `/alert NVDA > 140`、`/alert BTC 5m -2%`、`/alert NVDA 当日 5%`、`/alert MU 5m $20M` | 自定义提醒；末尾可加 `once` / `daily` / `always` 和 `touch`（触价即推，默认收盘确认） |
+| `/alert BTC 1h ema 20 50 金叉`、`/alert NVDA 15m rsi > 70`、`/alert BTC 1h macd 死叉`、`/alert ETH 15m boll 上` | 指标提醒（周期 1m / 5m / 15m / 1h，按该周期收盘计算；不写方向 = 两个方向都提醒） |
 | `/alerts`、`/unalert 3`、`/unalert all` | 自定义提醒列表、删除 |
+| `/stats` | 异动统计：最近 30 分钟和今天各市场、各分组的涨跌异动数和多空比（按级别加权） |
 | `/help` | 命令说明 |
 
 Discord 里用同名的斜杠命令（`/mute` 的标的和时长是两个参数）。告警下面的 👍/👎 记录这条有没有用，进日报，用来校准。命令也可以在 VPS 上用：`sudo mm status`、`sudo mm ctl mute MU 2h`、`sudo mm ctl unmute all`。
@@ -272,6 +275,34 @@ Discord 里用同名的斜杠命令（`/mute` 的标的和时长是两个参数�
 - 服务启动时自动补齐 130 天 15m 历史（加密从 Binance，美股从长桥），静默回放重建状态后才开始推送；重启期间已经结束的趋势会在原消息下补一句。
 - 网页后台「趋势」页：每个标的三个周期的打分、当前趋势、最近强位，最近 14 天的事件，以及参数和开关。各渠道在「推送渠道」页单独勾选要不要收趋势消息。
 - 回测：`sudo mm trend-backtest`（用库里的 15m 数据），`sudo mm trend-backtest BTCUSDT --fetch --days 240 --show`（先从 Binance 拉）。
+
+## 对外 API 和桌面版（V4）
+
+网页后台服务同时提供 `/api/v1`，给桌面版和其他客户端用。和后台一样经 Caddy 出 HTTPS，不用另开端口。
+
+1. 生成密钥：网页后台「API 密钥」页，或 `sudo mm api-key create --name 我的Mac`。密钥形如 `tfk_…`，只显示一次；服务器只存哈希。
+2. 桌面版里填服务器地址（`https://你的域名`）和密钥。
+3. 吊销：后台一键吊销，或 `sudo mm api-key revoke 编号`，已连着的客户端几秒内断开。
+
+| 接口 | 说明 |
+|---|---|
+| `GET /api/v1/ping` | 检查地址、密钥、版本 |
+| `GET /api/v1/status` | 和 `/status` 一样的运行状态 |
+| `GET /api/v1/signals?after=序号&limit=100&symbol=NVDA` | 信号历史（首发、延伸、升级、结束），按序号翻页 |
+| `GET /api/v1/symbols`、`/quotes` | 标的、分组、最新价、当日涨跌 |
+| `GET /api/v1/bars?symbol=BTC&tf=15m&limit=300`（tf 为 1m 或 15m） | K 线 |
+| `GET /api/v1/levels?symbol=NVDA`、`/trend` | 支撑压力区、趋势状态 |
+| `GET /api/v1/stats` | 异动统计 |
+| `GET/POST /api/v1/alerts`、`DELETE /api/v1/alerts/编号` | 自定义提醒（POST 的 `text` 和 /alert 写法一样） |
+| `GET/POST /api/v1/types`、`POST /api/v1/mute`、`DELETE /api/v1/mute/代码`、`POST /api/v1/feedback` | 类型开关、静音、👍/👎 |
+| `WS /api/v1/stream` | 连上后第一条发 `{"type":"auth","key":"tfk_…","after":序号}`；之后推 `signal`（实时信号）和每 5 秒一次 `quotes` |
+
+- 请求头 `Authorization: Bearer tfk_…`。read 权限只能看；write 还能改提醒、类型开关、静音、反馈。
+- 同一 IP 连续错 10 次封 15 分钟。允许跨域（只认 Bearer 密钥，不用 Cookie）。
+
+### 关键位突破
+
+15 分钟收盘越过强支撑 / 压力区（有 4h 拐点，或 ≥ 3 种来源）边缘 0.25 倍 ATR(1h)，下一根 15 分钟收盘仍在外面才推，同一区间 4 小时内不重复。走趋势消息的订阅。一条价格异动整个穿过强位时，只在异动卡片上加一行“突破强压力区 / 跌破强支撑区”，不再另发。关闭：`[trend] level_breaks = false`。
 
 ## 逐笔层（V4）
 
@@ -365,11 +396,14 @@ market_monitor_v3/
   custom.py      V4 自定义提醒
   ticks.py       V4 逐笔层：分钟摘要、大单门槛、大单流向、单笔冲涨跌（影子）
   tick_report.py 单笔冲涨跌影子报告
+  stats.py       异动统计（按级别加权的多空比）
+  apikeys.py     对外 API 密钥
+  api_backend.py 监控进程这一侧的 /api/v1 数据（经控制通道给网页后台）
   trend/         趋势监控：series.py 单周期打分、machine.py 状态机、levels.py 支撑压力位、
                  buckets.py 15m/1h/4h 分桶（美股正常盘）、engine.py 接入运行时、render.py 文案、backtest.py
   feeds/         binance_spot.py（K 线）、binance_trades.py（逐笔）、longbridge.py
   app.py         运行时：各个循环、热加载、优雅退出
   cli.py         monitor 命令
-  web/           网页管理后台（FastAPI + Jinja2 服务端渲染，无前端构建步骤）
+  web/           网页管理后台（FastAPI + Jinja2 服务端渲染，无前端构建步骤）；api.py 是 /api/v1
 deploy/          systemd 服务、install.sh、upgrade.sh、setup-web.sh、Caddy 示例、mm、配置和密钥示例
 ```

@@ -233,3 +233,4 @@ table.ovr input.narrow { min-width: 70px; }
 .sym-row:hover { background: var(--code-bg); }
 .sym-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sym-state { flex: none; text-align: right; }
+.select-all { user-select: all; word-break: break-all; padding: 8px 0; }
