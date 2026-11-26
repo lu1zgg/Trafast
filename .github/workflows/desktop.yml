@@ -94,10 +94,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          path: dist
-          merge-multiple: true
+          path: artifacts
       - name: 服务器后端源码包、校验和
         run: |
+          # 构件里安装包在 dmg/、nsis/、msi/ 子目录下：全部拿出来平铺到 dist/
+          mkdir -p dist
+          find artifacts -type f \( -name '*.dmg' -o -name '*.exe' -o -name '*.msi' \) -exec cp -t dist {} +
+          ls dist | grep -q '\.dmg$' || { echo "没有找到 Mac 安装包"; exit 1; }
+          ls dist | grep -q '\.exe$' || { echo "没有找到 Windows 安装包"; exit 1; }
           name="trafast-server-${TAG}"
           git archive --format=tar.gz --prefix="${name}/" -o "dist/${name}.tar.gz" HEAD -- . ':!desktop' ':!.github'
           git archive --format=zip --prefix="${name}/" -o "dist/${name}.zip" HEAD -- . ':!desktop' ':!.github'
