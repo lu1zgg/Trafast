@@ -157,6 +157,9 @@ class Runtime:
         self.exit_code = 0
         self.binance: Any = None
         self.lb: Any = None
+        self.ticks: Any = None  # V4 P2 逐笔层（TickHub）
+        self.binance_trades: Any = None
+        self._ticks_saved_at = 0.0
         self.tasks: list[asyncio.Task[Any]] = []
 
     # ---- 启动 ----
@@ -243,6 +246,7 @@ class Runtime:
                 show=cfg.trend.sr_show,
             )
         await self._restore()
+        await self._start_ticks()
 
         if self.binance is not None:
             try:
@@ -279,6 +283,45 @@ class Runtime:
         await self._load_v4_state(now)
         if eps:
             log.info("恢复 %d 个进行中的事件", len(eps))
+
+    async def _start_ticks(self) -> None:
+        """V4 P2：逐笔层。加密走单独的 Binance aggTrade 连接，美股复用长桥连接订逐笔。"""
+        tc = self.cfg.ticks
+        if not tc.enabled or self.engine is None:
+            return
+        use_crypto = tc.crypto and self.cfg.crypto.enabled
+        use_stocks = tc.stocks and self.lb is not None
+        if not (use_crypto or use_stocks):
+            return
+        from .ticks import TickHub
+
+        eng = self.engine
+        self.ticks = TickHub(tc, self.params, self.baselines, eng.hist.get, eng.session_for)
+        now = self.clock()
+        since_day = datetime.fromtimestamp(now - 31 * 86400, UTC).strftime("%Y-%m-%d")
+        self.ticks.load_hists(await self.store.call(Store.tick_hists, since_day))
+        self.ticks.load_minutes(await self.store.call(Store.tick_minutes, now - tc.big_days_crypto * 86400))
+        eng.flow = self.ticks.flow
+        if use_crypto:
+            from .feeds.binance_trades import BinanceTradeFeed
+
+            self.binance_trades = BinanceTradeFeed(
+                self.cfg.crypto, self.ticks.on_trade, stale_s=self.cfg.health.binance_stale_s, clock=self.clock
+            )
+        if use_stocks:
+            self.lb.on_tick = self.ticks.on_trade
+        log.info("逐笔层已启用（%s）", "、".join(x for x, on in (("加密", use_crypto), ("美股", use_stocks)) if on))
+
+    async def save_ticks(self, force: bool = False) -> None:
+        if self.ticks is None:
+            return
+        now = self.clock()
+        if not force and now - self._ticks_saved_at < 10:
+            return
+        self._ticks_saved_at = now
+        mins, shadows, hists = self.ticks.drain()
+        if mins or shadows or hists:
+            await self.store.call(Store.tick_save, mins, shadows, hists)
 
     async def _load_v4_state(self, now: float) -> None:
         """V4：类型开关、自定义提醒规则、当日涨跌幅的参考价。"""
@@ -395,6 +438,9 @@ class Runtime:
                     self.lb.flush_trades(now)
                 self.engine.on_tick(now)
                 await self.flush()
+                if self.ticks is not None:
+                    self.ticks.roll(now)
+                    await self.save_ticks()
             except Exception:
                 log.exception("时钟 tick 出错")
             core_ok = self.queue.qsize() == 0 or now - self.core_progress < 30
@@ -667,7 +713,43 @@ class Runtime:
         not_ready = [display_name(s) for s in self.cfg.all_symbols() if not self.baselines.ready_sessions(s)]
         if not_ready:
             lines.append("基线未就绪（只用直通线）：" + "、".join(not_ready))
+        tl = self.ticks_text(now)
+        if tl:
+            lines.append(tl)
         return "\n".join(lines)
+
+    def ticks_info(self, now: float) -> dict[str, Any] | None:
+        if self.ticks is None:
+            return None
+        info = self.ticks.status()
+        bt = self.binance_trades
+        if bt is not None:
+            info["binance"] = {
+                "connected": bt.connected,
+                "reconnects": bt.reconnects,
+                "messages": bt.messages,
+                "cpu_s": bt.cpu_s,
+                "max_lag_s": bt.max_lag_s,
+            }
+        if self.lb is not None:
+            info["longbridge_ticks"] = self.lb.ticks
+        info["uptime_s"] = now - self.started_at
+        return info
+
+    def ticks_text(self, now: float) -> str:
+        info = self.ticks_info(now)
+        if info is None:
+            return ""
+        st = info["stats"]
+        up = max(1.0, info["uptime_s"])
+        parts = [f"逐笔：{st['trades'] / up:.1f} 笔/秒"]
+        bt = info.get("binance")
+        if bt is not None:
+            parts.append(("Binance 已连接" if bt["connected"] else "Binance 未连接") + f"，CPU {bt['cpu_s'] / up * 100:.1f}%")
+        ready = [display_name(s) for s, v in info["symbols"].items() if v["big_thr"] is not None]
+        parts.append("大单门槛就绪：" + ("、".join(ready) if ready else "暂无"))
+        parts.append(f"单笔冲涨跌（影子）{int(st['jumps'])} 次，接受 {int(st['accepted'])}，过入门门 {int(st['gate_pass'])}")
+        return "｜".join(parts)
 
     def params_text(self) -> str:
         rows = self.params.table()
@@ -733,6 +815,9 @@ class Runtime:
         keys = {"enabled", "disabled_symbols", "zigzag_atr", "adx_min", "history_days"}
         if new.trend.model_dump(include=keys) != old.trend.model_dump(include=keys):
             out.append("趋势监控的标的或打分参数")
+        tkeys = {"enabled", "crypto", "stocks"}
+        if new.ticks.model_dump(include=tkeys) != old.ticks.model_dump(include=tkeys):
+            out.append("逐笔层开关")
         return out
 
     async def reload(self, auto_restart: bool = False) -> dict[str, Any]:
@@ -751,6 +836,12 @@ class Runtime:
         self.engine.cfg = new
         self.engine.set_params(self.params)
         self.engine.merger.buttons = new.telegram.feedback_buttons or new.discord.feedback_buttons
+        self.engine.flow_mult = new.ticks.flow_mult
+        self.engine.flow_tag = new.ticks.flow_tag
+        if self.ticks is not None:
+            # 逐笔层的门槛参数可以热加载；开关和数据源的变化要重启
+            self.ticks.cfg = new.ticks
+            self.ticks.params = self.params
         if self.trend is not None:
             self.trend.set_params(new.trend.params(), new.trend.sr_show)
             self.trend.buttons = self.engine.merger.buttons
@@ -908,6 +999,7 @@ class Runtime:
             ],
             "mutes": {k: v for k, v in self.engine.mutes.items() if v > now},
             "baseline_not_ready": [display_name(s) for s in self.cfg.all_symbols() if not self.baselines.ready_sessions(s)],
+            "ticks": self.ticks_info(now),
             "recent": await self.store.call(_recent_alerts, now - 3 * 86400),
         }
 
@@ -951,6 +1043,8 @@ class Runtime:
             self.control = None
         if self.binance is not None:
             coros.append(self.binance.run(self.stop))
+        if self.binance_trades is not None:
+            coros.append(self.binance_trades.run(self.stop))
         if self.lb is not None:
             coros.append(self.lb.run(self.stop))
             coros.append(self.lb_bootstrap())
@@ -995,6 +1089,7 @@ class Runtime:
         await asyncio.gather(*self.tasks, return_exceptions=True)
         try:
             await self.flush()
+            await self.save_ticks(force=True)
         except Exception:  # noqa: BLE001
             log.exception("停止时写库失败")
         for s in self.senders.values():

@@ -20,6 +20,7 @@
 | TradingView 告警转发 | 完成，用模拟 webhook 测过 |
 | 长桥数据源 | 代码写好，**还没接通真实账号**，接通步骤见下文 |
 | 趋势监控（15m / 1h / 4h，支撑压力位） | 完成，有单元测试；规则用 8 个月真实 K 线回测过，见下文 |
+| V4 逐笔层（大单流向标签、单笔冲涨跌影子记录） | 完成，有单元测试和模拟断线测试；Binance 逐笔还没在 VPS 上测 CPU，长桥逐笔等接通 |
 | 真实行情回放 | 还没做：开发环境连不上 Binance。部署后跑 `sudo mm replay` 看实际消息量 |
 
 ## 怎么判断异动（灵敏档）
@@ -272,6 +273,23 @@ Discord 里用同名的斜杠命令（`/mute` 的标的和时长是两个参数�
 - 网页后台「趋势」页：每个标的三个周期的打分、当前趋势、最近强位，最近 14 天的事件，以及参数和开关。各渠道在「推送渠道」页单独勾选要不要收趋势消息。
 - 回测：`sudo mm trend-backtest`（用库里的 15m 数据），`sudo mm trend-backtest BTCUSDT --fetch --days 240 --show`（先从 Binance 拉）。
 
+## 逐笔层（V4）
+
+加密货币另开一条 Binance aggTrade 连接收逐笔成交，美股在长桥接通后复用同一个连接订逐笔。逐笔本身不落库，只在内存里聚合；库里只存每分钟摘要（`tick_1m`）、单笔成交额直方图（`tick_hist`）和单笔冲涨跌的影子记录（`tick_shadow`）。
+
+- **大单**：单笔成交额 ≥ 该标的近 14 天（美股近 20 个同类时段）单笔成交额的 99 分位。直方图攒够 2000 笔才算门槛，所以刚升级时要等一会儿。
+- **大单流向**：5 分钟大单净额（主动买大单 − 主动卖大单）≥ 常态 3 倍，并且和价格异动同向，卡片的成交额块里多一行 `5 分钟大单净买入 $1.20M｜常态的 3.4 倍`。常态要攒 6 小时的样本才就绪。它只是证据，不触发、不升级。
+- **单笔冲涨跌（影子模式）**：一笔成交相对上一笔跳价 ≥ max(1%, 2 × 该时段 1 分钟地板)，这一笔成交额 ≥ 单笔中位数 5 倍；之后 20 秒内 ≥ 3 笔、成交均价保留 ≥ 60% 算市场接受，再用实时价看 1 分钟位移能不能过入门门。**现在只记录不推送**，先跑一周看报告：
+
+  ```bash
+  sudo mm tick-report --days 7          # 跳价几次、过入门门几次、比 K 线推送早多少秒、多少次后来没有推送
+  sudo mm tick-report --days 1 --show   # 列出每一次
+  ```
+
+  日报里也有一行汇总。美股盘前、盘后、夜盘不做（这些时段的坏价正是单笔跳价）。
+- `sudo mm status` 和 Telegram 的 `/status` 里有一行逐笔状态：每秒笔数、逐笔解析占用的 CPU、哪些标的的大单门槛已就绪。
+- 不想要逐笔层：`config.toml` 里 `[ticks] enabled = false`，然后重启。
+
 ## 调参和回放
 
 - 最方便的是在网页后台「规则」页改：保存即生效，旧版本自动存档。
@@ -343,9 +361,13 @@ market_monitor_v3/
   health.py      断流、积压、卡顿、对时、心跳、看门狗
   reporting.py   日报
   replay.py      回放
+  patterns.py    V4 形态分类（V 反转、盘整突破、急拉急跌、持续推进）和放量标签
+  custom.py      V4 自定义提醒
+  ticks.py       V4 逐笔层：分钟摘要、大单门槛、大单流向、单笔冲涨跌（影子）
+  tick_report.py 单笔冲涨跌影子报告
   trend/         趋势监控：series.py 单周期打分、machine.py 状态机、levels.py 支撑压力位、
                  buckets.py 15m/1h/4h 分桶（美股正常盘）、engine.py 接入运行时、render.py 文案、backtest.py
-  feeds/         binance_spot.py、longbridge.py
+  feeds/         binance_spot.py（K 线）、binance_trades.py（逐笔）、longbridge.py
   app.py         运行时：各个循环、热加载、优雅退出
   cli.py         monitor 命令
   web/           网页管理后台（FastAPI + Jinja2 服务端渲染，无前端构建步骤）

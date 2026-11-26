@@ -15,6 +15,7 @@
     ────────────────
     成交额
     1 分钟 $3.62M｜该时段常态的 2.1 倍｜放量
+    5 分钟大单净卖出 $1.20M｜常态的 3.4 倍
     ────────────────
     北京 11-23 17:38｜美东 04:38
 
@@ -189,10 +190,24 @@ def card_text(card: dict[str, Any]) -> str:
         if "vol" in (card.get("tags") or []):
             t += "｜" + b("放量")
         lines += [DIVIDER, "成交额", t]
+        flow = flow_line(card)
+        if flow:
+            lines.append(flow)
     lines += [DIVIDER, times_line(card["close_ts"], card["market"])]
     if card.get("end"):
         lines.append(end_text(card["end"]))
     return "\n".join(lines)
+
+
+def flow_line(card: dict[str, Any]) -> str:
+    """V4 P2：大单流向证据（逐笔层给的标签），只在和价格同向时出现。"""
+    tags = card.get("tags") or []
+    reason = card.get("reason") or {}
+    net, ratio = reason.get("flow_net"), reason.get("flow_ratio")
+    if net is None or ratio is None or not ({"big_buy", "big_sell"} & set(tags)):
+        return ""
+    side = "大单净买入" if net > 0 else "大单净卖出"
+    return f"5 分钟{side} {b(money(abs(net)))}｜常态的 {b(f'{abs(ratio):.1f} 倍')}"
 
 
 def card_compact(card: dict[str, Any]) -> str:

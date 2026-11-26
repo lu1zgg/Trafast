@@ -117,6 +117,21 @@ CREATE TABLE IF NOT EXISTS signals (
 );
 CREATE INDEX IF NOT EXISTS signals_ts ON signals (ts);
 
+-- V4 P2 逐笔层：每分钟摘要、单笔成交额直方图（大单门槛）、单笔冲涨跌影子记录。逐笔本身不落库
+CREATE TABLE IF NOT EXISTS tick_1m (
+    symbol TEXT NOT NULL, ts INTEGER NOT NULL, session TEXT, n INTEGER, buy REAL, sell REAL,
+    big_n INTEGER, big_buy REAL, big_sell REAL, PRIMARY KEY (symbol, ts)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS tick_hist (
+    symbol TEXT NOT NULL, day TEXT NOT NULL, skey TEXT NOT NULL, counts TEXT NOT NULL,
+    PRIMARY KEY (symbol, day, skey)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS tick_shadow (
+    id INTEGER PRIMARY KEY, ts REAL NOT NULL, symbol TEXT NOT NULL, session TEXT, direction INTEGER,
+    status TEXT NOT NULL, data TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS tick_shadow_ts ON tick_shadow (ts);
+
 -- V4 自定义提醒（custom.CustomRule）；触发状态随引擎写回
 CREATE TABLE IF NOT EXISTS custom_rules (
     id INTEGER PRIMARY KEY, symbol TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1,
@@ -607,6 +622,56 @@ class Store:
         ).fetchall()
         return [json.loads(r["data"]) for r in rows]
 
+    # ---- V4 P2 逐笔层 ----
+    def tick_save(self, minutes: list[Any], shadows: list[Any], hists: list[tuple[str, str, str, list[int]]]) -> None:
+        with self.c:
+            if minutes:
+                self.c.executemany(
+                    "INSERT OR REPLACE INTO tick_1m (symbol, ts, session, n, buy, sell, big_n, big_buy, big_sell) "
+                    "VALUES (?,?,?,?,?,?,?,?,?)",
+                    [m.row() for m in minutes],
+                )
+            if shadows:
+                self.c.executemany(
+                    "INSERT INTO tick_shadow (ts, symbol, session, direction, status, data) VALUES (?,?,?,?,?,?)",
+                    [
+                        (sh.ts, sh.symbol, sh.session, sh.direction, sh.status, json.dumps(sh.to_json(), ensure_ascii=False))
+                        for sh in shadows
+                    ],
+                )
+            if hists:
+                self.c.executemany(
+                    "INSERT OR REPLACE INTO tick_hist (symbol, day, skey, counts) VALUES (?,?,?,?)",
+                    [(sym, day, skey, json.dumps(counts)) for sym, day, skey, counts in hists],
+                )
+
+    def tick_hists(self, since_day: str) -> list[tuple[str, str, str, list[int]]]:
+        rows = self.c.execute("SELECT symbol, day, skey, counts FROM tick_hist WHERE day>=?", (since_day,)).fetchall()
+        return [(r["symbol"], r["day"], r["skey"], json.loads(r["counts"])) for r in rows]
+
+    def tick_minutes(self, since: float) -> list[Any]:
+        from .ticks import TickMinute
+
+        rows = self.c.execute(
+            "SELECT symbol, ts, session, n, buy, sell, big_n, big_buy, big_sell FROM tick_1m WHERE ts>=? ORDER BY ts",
+            (int(since),),
+        ).fetchall()
+        return [TickMinute(*tuple(r)) for r in rows]
+
+    def tick_shadows(self, since: float, until: float | None = None) -> list[dict[str, Any]]:
+        rows = self.c.execute(
+            "SELECT data FROM tick_shadow WHERE ts>=? AND ts<? ORDER BY ts", (since, until if until is not None else 1e18)
+        ).fetchall()
+        return [json.loads(r["data"]) for r in rows]
+
+    def signals_between(self, since: float, until: float, kind: str | None = None) -> list[dict[str, Any]]:
+        q = "SELECT data FROM signals WHERE ts>=? AND ts<?"
+        args: list[Any] = [int(since), int(until) + 1]
+        if kind:
+            q += " AND kind=?"
+            args.append(kind)
+        return [json.loads(r["data"]) for r in self.c.execute(q + " ORDER BY ts", args)]
+
     # ---- 维护 ----
     def maintenance(self, now: float, bars_days: int, l0_days: int, outbox_days: int, backup_dir: Path, backup_keep: int) -> str:
         c = self.c
@@ -627,6 +692,10 @@ class Store:
             c.execute("DELETE FROM trend_bars WHERE ts<?", (int(now - 400 * 86400),))
             c.execute("DELETE FROM trend_events WHERE ts<?", (int(now - 400 * 86400),))
             c.execute("DELETE FROM signals WHERE ts<?", (int(now - 400 * 86400),))
+            c.execute("DELETE FROM tick_1m WHERE ts<?", (int(now - bars_days * 86400),))
+            c.execute("DELETE FROM tick_shadow WHERE ts<?", (now - 400 * 86400,))
+            cutoff_day = time.strftime("%Y-%m-%d", time.gmtime(now - 60 * 86400))
+            c.execute("DELETE FROM tick_hist WHERE day<?", (cutoff_day,))
         c.execute("PRAGMA optimize")
         c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         backup_dir.mkdir(parents=True, exist_ok=True)

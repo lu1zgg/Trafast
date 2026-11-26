@@ -75,6 +75,31 @@ def test_trade_bar_builder():
     assert (x.o, x.h, x.l, x.c, x.volume) == (600, 605, 600, 603, 16)
 
 
+def test_trades_forwarded_to_tick_layer():
+    class TD:
+        class Up: ...
+        class Down: ...
+        class Neutral: ...
+
+    f, out = feed()
+    f._sdk = SimpleNamespace(TradeSession=FakeTS, TradeDirection=TD)
+    got = []
+    f.on_tick = got.append
+    ts = et_ts(2026, 11, 24, 10, 0)
+    dt = datetime.fromtimestamp(ts + 1.5, UTC).replace(tzinfo=None)
+    trades = [
+        SimpleNamespace(timestamp=dt, price=600, volume=10, trade_type="", trade_session=FakeTS.Intraday, direction=TD.Up),
+        SimpleNamespace(timestamp=dt, price=601, volume=5, trade_type="", trade_session=FakeTS.Intraday, direction=TD.Down),
+        SimpleNamespace(timestamp=dt, price=599, volume=1, trade_type="", trade_session=FakeTS.Intraday, direction=TD.Neutral),
+        SimpleNamespace(timestamp=dt, price=500, volume=1, trade_type="P", trade_session=FakeTS.Intraday, direction=TD.Up),
+    ]
+    f._on_trades("MU.US", SimpleNamespace(trades=trades))
+    assert [(t.price, t.side, t.session) for t in got] == [(600, 1, "REG"), (601, -1, "REG"), (599, 0, "REG")]
+    assert got[0].ts == ts + 1.5
+    # K 线来自 K 线推送（bar_source = candles）时，逐笔不合成 K 线
+    assert f.flush_trades(ts + 120) is None and out == []
+
+
 def test_real_sdk_enums_if_installed():
     sdk = pytest.importorskip("longbridge.openapi")
     assert map_session(sdk, sdk.TradeSession.Pre) == "PRE"

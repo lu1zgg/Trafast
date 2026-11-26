@@ -182,6 +182,23 @@ outbox_days = 30
 backup_keep = 7
 maintenance_time = "12:30"      # 北京时间，夜盘清淡时段
 
+[ticks]                         # V4 逐笔层：大单流向标签 + 单笔冲涨跌（影子模式，只记录不推送）
+enabled = true
+crypto = true                   # Binance aggTrade，单独一条连接
+stocks = true                   # 长桥逐笔（接通长桥后生效；方向字段要用 lb-check 核对）
+jump_min_pct = 1.0              # 单笔跳价至少 1%，且 ≥ 2 倍该时段 1 分钟地板
+jump_floor_mult = 2.0
+jump_notional_mult = 5.0        # 这一笔成交额 ≥ 单笔中位数的 5 倍（挡掉零股）
+accept_s = 20                   # 之后 20 秒内 ≥ 3 笔、成交均价保留 ≥ 60% 算市场接受
+accept_min_trades = 3
+accept_retain = 0.6
+big_quantile = 0.99             # 大单 = 单笔成交额 ≥ 近 14 天（美股近 20 个同类时段）的 99 分位
+big_days_crypto = 14
+big_sessions_us = 20
+flow_window_min = 5             # 5 分钟大单净额 ≥ 常态 3 倍且与价格同向 → 卡片加“大单净买入 / 净卖出”
+flow_mult = 3.0
+flow_tag = true
+
 [weekend_perp]
 enabled = false                 # 周末合约模块：louis 决定不开，本版本未实现
 
