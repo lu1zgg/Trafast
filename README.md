@@ -22,6 +22,7 @@
 | 趋势监控（15m / 1h / 4h，支撑压力位） | 完成，有单元测试；规则用 8 个月真实 K 线回测过，见下文 |
 | V4 逐笔层（大单流向标签、单笔冲涨跌影子记录） | 完成，有单元测试和模拟断线测试；Binance 逐笔还没在 VPS 上测 CPU，长桥逐笔等接通 |
 | V4 对外 API（/api/v1 + WebSocket，API 密钥）、关键位突破、异动统计、指标提醒 | 完成，有单元测试 |
+| V4 桌面版（Mac + Windows，Tauri） | 完成，界面连本地后端实测过；安装包由 GitHub Actions 打，还没在真机上装过 |
 | 真实行情回放 | 还没做：开发环境连不上 Binance。部署后跑 `sudo mm replay` 看实际消息量 |
 
 ## 怎么判断异动（灵敏档）
@@ -281,7 +282,7 @@ Discord 里用同名的斜杠命令（`/mute` 的标的和时长是两个参数�
 网页后台服务同时提供 `/api/v1`，给桌面版和其他客户端用。和后台一样经 Caddy 出 HTTPS，不用另开端口。
 
 1. 生成密钥：网页后台「API 密钥」页，或 `sudo mm api-key create --name 我的Mac`。密钥形如 `tfk_…`，只显示一次；服务器只存哈希。
-2. 桌面版里填服务器地址（`https://你的域名`）和密钥。
+2. 桌面版里填服务器地址（`https://你的域名`）和密钥。桌面版的下载、功能和开发见 [desktop/README.md](desktop/README.md)。
 3. 吊销：后台一键吊销，或 `sudo mm api-key revoke 编号`，已连着的客户端几秒内断开。
 
 | 接口 | 说明 |
@@ -405,5 +406,6 @@ market_monitor_v3/
   app.py         运行时：各个循环、热加载、优雅退出
   cli.py         monitor 命令
   web/           网页管理后台（FastAPI + Jinja2 服务端渲染，无前端构建步骤）；api.py 是 /api/v1
+desktop/         桌面版（Tauri 2 + Svelte，Mac 和 Windows），见 desktop/README.md
 deploy/          systemd 服务、install.sh、upgrade.sh、setup-web.sh、Caddy 示例、mm、配置和密钥示例
 ```
