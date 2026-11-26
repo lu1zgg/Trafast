@@ -60,7 +60,8 @@
     {{ num("confirm_ratio", cfg.rules.confirm_ratio, "站稳比例", "下一分钟还保留这个比例的涨跌幅才推送（0.6 = 60%），用来过滤插针", "0.05", 0.05, 1) }}
     {{ num("fast_score", cfg.rules.fast_score, "直接推送得分", "得分达到这个值（或碰到直通线）不等确认，立即按 L3 推送", "0.1", 1.1) }}
     {{ num("l2_score", cfg.rules.l2_score, "L2 得分", "得分达到这个值算 L2 明显", "0.1", 1) }}
-    {{ num("l2_turnover_mult", cfg.rules.l2_turnover_mult, "L2 成交额倍数", "成交额达到该时段常态的这个倍数，也算 L2", "0.5", 0.5) }}
+    {{ num("l2_turnover_mult", cfg.rules.l2_turnover_mult, "L2 成交额倍数", "成交额达到该时段常态的这个倍数，也算 L2。V4 默认 0 = 关闭（回测里几乎每条告警都满足，没有区分度）", "0.5", 0) }}
+    {{ num("spike_extra_confirm", cfg.rules.spike_extra_confirm, "急拉急跌多确认（分钟）", "急拉急跌（L1 / L2）站稳后再等这么多根 K 线，每根都保留站稳比例才推；L3 不等。0 = 不多等", 1, 0, 5) }}
     {{ num("thin_turnover_frac", cfg.rules.thin_turnover_frac, "稀薄时段最低成交额", "夜盘和清早盘前：窗口成交额至少是该时段中位数的这个比例，过滤没量的跳价", "0.05", 0, 1) }}
     {{ text("thin_pre_until", cfg.rules.thin_pre_until, "清早盘前截止（美东时间）", "这个时间之前的盘前按稀薄时段处理", "07:00", True) }}
   </div>

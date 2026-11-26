@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import fcntl
 import html
+import json
 import logging
 import math
 import os
@@ -275,8 +276,25 @@ class Runtime:
         roots = await self.store.call(Store.load_roots, [e.root_key for e in eps if e.root_key])
         self.engine.restore(eps, roots)
         self.engine.mutes = await self.store.call(Store.mutes_load, now)
+        await self._load_v4_state(now)
         if eps:
             log.info("恢复 %d 个进行中的事件", len(eps))
+
+    async def _load_v4_state(self, now: float) -> None:
+        """V4：类型开关、自定义提醒规则、当日涨跌幅的参考价。"""
+        assert self.engine is not None
+        raw = await self.store.call(Store.kv_get, "types_off")
+        try:
+            self.engine.types_off = {k: list(v) for k, v in json.loads(raw).items()} if raw else {}
+        except (ValueError, AttributeError):
+            log.warning("kv types_off 无法解析，忽略")
+            self.engine.types_off = {}
+        self.engine.custom.set_rules(await self.store.call(Store.custom_rules))
+        today_et = datetime.fromtimestamp(now, ET).replace(hour=0, minute=0, second=0, microsecond=0)
+        for sym in self.cfg.all_symbols():
+            if market_of(sym) == "US":
+                ref = await self.store.call(Store.last_close, sym, "REG", int(today_et.timestamp()))
+                self.engine.custom.seed_ref(sym, ref)
 
     async def recompute_baselines(self, symbols: list[str]) -> None:
         now = self.clock()
@@ -512,6 +530,85 @@ class Runtime:
             display_name(sym), n, len(fetched), len(minutes), "可以判断" if m.ready else "数据还不够",
         )
 
+    # ---- V4：类型开关 ----
+    def resolve_target(self, s: str) -> str | None:
+        t = s.strip()
+        if t.lower() in ("all", "*", "全部"):
+            return "*"
+        for g in self.cfg.groups:
+            if t == g or t.lower() == g.lower() or t.removeprefix("group:") == g:
+                return f"group:{g}"
+        return self.resolve_symbol(t)
+
+    def types_text(self) -> str:
+        from .patterns import PATTERN_LABELS, PATTERNS
+
+        assert self.engine is not None
+        off = self.engine.types_off
+        glob = set(off.get("*", ()))
+        lines = ["<b>异动类型开关</b>"]
+        lines.append("　".join(f"{PATTERN_LABELS[p]} {'❌' if p in glob else '✅'}" for p in PATTERNS))
+        for target, pats in sorted(off.items()):
+            if target == "*" or not pats:
+                continue
+            name = target.replace("group:", "分组 ") if target.startswith("group:") else display_name(target)
+            lines.append(f"{html.escape(name)} 关闭：" + "、".join(PATTERN_LABELS.get(p, p) for p in pats))
+        lines.append("放量是标签，不能单独开关。分组：" + "；".join(
+            f"{html.escape(g)}（{'、'.join(html.escape(m) for m in ms)}）" for g, ms in self.cfg.groups.items()
+        ))
+        return "\n".join(lines)
+
+    async def set_type(self, target: str, pattern: str, off: bool) -> None:
+        assert self.engine is not None
+        cur = set(self.engine.types_off.get(target, ()))
+        if off:
+            cur.add(pattern)
+        else:
+            cur.discard(pattern)
+        if cur:
+            self.engine.types_off[target] = sorted(cur)
+        else:
+            self.engine.types_off.pop(target, None)
+        await self.store.call(Store.kv_set, "types_off", json.dumps(self.engine.types_off, ensure_ascii=False))
+
+    # ---- V4：自定义提醒 ----
+    def alerts_text(self) -> str:
+        assert self.engine is not None
+        rules = sorted(self.engine.custom.rules.values(), key=lambda r: r.id)
+        if not rules:
+            return "还没有自定义提醒。例如 /alert NVDA &gt; 140、/alert BTC 5m -2%。"
+        lines = ["<b>自定义提醒</b>"]
+        for r in rules:
+            state = "" if r.enabled else "（已触发，停用）"
+            lines.append(f"#{r.id} {html.escape(r.describe())}{state}" + (f"｜已触发 {r.fired} 次" if r.fired else ""))
+        lines.append("删除：/unalert 编号")
+        return "\n".join(lines)
+
+    async def add_alert(self, args: list[str], by: str) -> str:
+        from .custom import USAGE, CustomRule, parse_rule
+
+        assert self.engine is not None
+        if not args:
+            return USAGE
+        rule = parse_rule(args, self.resolve_symbol)
+        if not isinstance(rule, CustomRule):
+            return rule
+        if len(self.engine.custom.rules) >= 200:
+            return "自定义提醒最多 200 条，先用 /unalert 删掉一些。"
+        rule.created_by, rule.created_at = by, self.clock()
+        await self.store.call(Store.custom_add, rule)
+        self.engine.custom.rules[rule.id] = rule
+        return f"已添加自定义提醒 #{rule.id}：{html.escape(rule.describe())}"
+
+    async def remove_alert(self, rule_id: int | None) -> int:
+        assert self.engine is not None
+        n = await self.store.call(Store.custom_delete, rule_id)
+        if rule_id is None:
+            self.engine.custom.rules.clear()
+        else:
+            self.engine.custom.rules.pop(rule_id, None)
+        return n
+
     async def trend_text(self, args: list[str]) -> str:
         if self.trend is None:
             return "趋势监控没有启用（config.toml 的 [trend] enabled = false，或者没有标的）。"
@@ -581,6 +678,9 @@ class Runtime:
             lines.append(f"标的系数（乘在地板上）：{mults}")
         r = self.cfg.rules
         lines.append(f"站稳要求：下一分钟保留 ≥ {r.confirm_ratio:.0%}；score ≥ {r.fast_score:g} 或触发直通 → L3 立即推")
+        if r.spike_extra_confirm:
+            lines.append(f"急拉急跌（L1/L2）再多确认 {r.spike_extra_confirm} 分钟；L3 不等")
+        lines.append("成交额放大升 L2：" + (f"≥ {r.l2_turnover_mult:g} 倍" if r.l2_turnover_mult > 0 else "关闭（V4 默认）"))
         return "\n".join(lines)
 
     def mutes_text(self) -> str:
@@ -702,6 +802,32 @@ class Runtime:
             t = req.get("target")
             n = await self.unmute(None if t in (None, "*", "all") else self.resolve_symbol(str(t)) or str(t))
             return {"ok": True, "cleared": n}
+        if cmd == "types":
+            from .patterns import PATTERN_LABELS
+
+            return {"ok": True, "types_off": self.engine.types_off, "labels": PATTERN_LABELS, "groups": self.cfg.groups}
+        if cmd == "types_set":
+            from .patterns import parse_pattern
+
+            pattern = parse_pattern(str(req.get("pattern") or ""))
+            target = self.resolve_target(str(req.get("target") or "*"))
+            if pattern is None or target is None:
+                return {"ok": False, "error": "类型或目标不对"}
+            await self.set_type(target, pattern, bool(req.get("off")))
+            return {"ok": True, "types_off": self.engine.types_off}
+        if cmd == "alerts":
+            return {"ok": True, "rules": [
+                {**r.to_json(), "text": r.describe()} for r in sorted(self.engine.custom.rules.values(), key=lambda r: r.id)
+            ]}
+        if cmd == "alert_add":
+            text = str(req.get("text") or "").strip()
+            msg = await self.add_alert(text.split(), "web")
+            ok = msg.startswith("已添加")
+            return {"ok": ok, "message": html.unescape(msg)} if ok else {"ok": False, "error": html.unescape(msg)}
+        if cmd == "alert_del":
+            rid = req.get("id")
+            n = await self.remove_alert(None if rid in (None, "all") else int(rid))
+            return {"ok": True, "removed": n}
         if cmd == "test":
             ch = str(req.get("channel") or "")
             if ch not in self.senders:

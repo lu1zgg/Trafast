@@ -13,6 +13,7 @@ from dataclasses import replace
 
 from .baseline import Baselines
 from .config import AppConfig, Params
+from .custom import CustomAlerts
 from .detector import evaluate
 from .episodes import EpisodeManager
 from .merge import Merger
@@ -43,8 +44,14 @@ class Engine:
         self.hist: dict[str, SymbolHistory] = {s: SymbolHistory() for s in cfg.all_symbols()}
         self.stock_symbols = list(cfg.stocks.symbols) if cfg.stocks.enabled else []
         self.merger = Merger(params, sink, cfg.telegram.feedback_buttons)
-        self.episodes = EpisodeManager(params, self.merger, sink, self.is_muted, cfg.telegram.silent_extension_replies)
+        self.merger.groups_of = self.groups_of
+        self.episodes = EpisodeManager(
+            params, self.merger, sink, self.is_muted, cfg.telegram.silent_extension_replies, self.is_type_off
+        )
         self.mutes: dict[str, float] = {}
+        # V4 类型开关：目标（"*"、标的代码、"group:分组名"）→ 关掉的类型。存在 kv 表 types_off
+        self.types_off: dict[str, list[str]] = {}
+        self.custom = CustomAlerts()
         self.stats: Counter[str] = Counter()
         self.last_bar_at: dict[str, float] = {}
         self._last_eval: dict[str, tuple[int, bool]] = {}
@@ -70,6 +77,15 @@ class Engine:
                 return True
         return False
 
+    def groups_of(self, symbol: str) -> list[str]:
+        return self.cfg.groups_of(symbol)
+
+    def is_type_off(self, symbol: str, pattern: str) -> bool:
+        if not self.types_off:
+            return False
+        targets = ["*", symbol] + [f"group:{g}" for g in self.groups_of(symbol)]
+        return any(pattern in self.types_off.get(t, ()) for t in targets)
+
     def seed_history(self, bars: Iterable[Bar]) -> int:
         n = 0
         for b in sorted(bars, key=lambda x: x.ts):
@@ -80,6 +96,7 @@ class Engine:
                 b.session = self.session_for(b.symbol, b.ts)
             h.add(b)
             self._note_ref(b)
+            self.custom.observe(b)
             n += 1
         return n
 
@@ -164,6 +181,14 @@ class Engine:
             h.add(replace(bar, o=pc, h=pc, l=pc, c=pc))
         self._last_eval[sym] = (bar.ts, ev.candidate is not None)
         self.episodes.on_bar(bar, ev, now)
+        if self.custom.rules:
+            self.custom.on_bar(h.get(bar.ts) or bar, h, now, self._emit_custom)
+        else:
+            self.custom.observe(bar)
+
+    def _emit_custom(self, rule, msg) -> None:  # noqa: ANN001
+        self.sink.out(msg)
+        self.sink.custom(rule)
 
     def on_tick(self, now: float) -> None:
         if self.stock_symbols and self.cfg.stocks.synthesize_missing:

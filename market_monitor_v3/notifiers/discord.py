@@ -251,6 +251,22 @@ SLASH_COMMANDS: list[dict[str, Any]] = [
         "description": "取消静音",
         "options": [{"type": 3, "name": "symbol", "description": "代码，或 all", "required": True}],
     },
+    {
+        "name": "types",
+        "description": "异动类型开关",
+        "options": [{"type": 3, "name": "args", "description": "例如 off 急拉急跌 NVDA；不填看当前状态", "required": False}],
+    },
+    {
+        "name": "alert",
+        "description": "添加自定义提醒",
+        "options": [{"type": 3, "name": "rule", "description": "例如 NVDA > 140、BTC 5m -2%、NVDA 当日 5%", "required": True}],
+    },
+    {"name": "alerts", "description": "自定义提醒列表"},
+    {
+        "name": "unalert",
+        "description": "删除自定义提醒",
+        "options": [{"type": 3, "name": "id", "description": "编号，或 all", "required": True}],
+    },
 ]
 
 CommandFn = Callable[[str, list[str], int | None, str], Awaitable[str | None]]
@@ -445,6 +461,9 @@ class DiscordGateway:
                 await self._respond(iid, itoken, "这个频道不接收命令。")
                 return
             args = [v for k in ("symbol", "duration") if (v := opts.get(k))]
+            for k in ("args", "rule", "id"):
+                if opts.get(k):
+                    args += opts[k].split()
             # 先回一个“正在处理”，3 秒内必须响应；结果再编辑进去
             await self.client.request(
                 "POST", f"/interactions/{iid}/{itoken}/callback", {"type": 5}, kind="probe"

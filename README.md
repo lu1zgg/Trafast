@@ -250,6 +250,9 @@ Discord 里是同样的内容，放在左边带颜色竖条的卡片里（绿涨
 | `/params` | 当前门槛表 |
 | `/report` | 立即生成最近 24 小时日报 |
 | `/trend`、`/trend NVDA` | 全部标的的趋势状态；带代码看单个标的的三个周期打分和支撑压力位 |
+| `/types`、`/types off 急拉急跌 [代码\|分组]`、`/types on ...` | 异动类型开关（V 反转、盘整突破、急拉急跌、持续推进），可按全部、标的或分组 |
+| `/alert NVDA > 140`、`/alert BTC 5m -2%`、`/alert NVDA 当日 5%`、`/alert MU 5m $20M` | 自定义提醒；末尾可加 `once` / `daily` / `always` 和 `touch`（触价即推，默认收盘确认） |
+| `/alerts`、`/unalert 3`、`/unalert all` | 自定义提醒列表、删除 |
 | `/help` | 命令说明 |
 
 Discord 里用同名的斜杠命令（`/mute` 的标的和时长是两个参数）。告警下面的 👍/👎 记录这条有没有用，进日报，用来校准。命令也可以在 VPS 上用：`sudo mm status`、`sudo mm ctl mute MU 2h`、`sudo mm ctl unmute all`。

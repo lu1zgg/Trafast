@@ -1,7 +1,7 @@
 """Telegram Bot 接收：命令和反馈按钮（getUpdates 长轮询，不开任何入站端口）。
 
 只处理配置里那个群的消息；其他聊天一律忽略。
-修改类命令（/mute、/unmute）在配置了 admin_user_ids 时只接受这些用户。
+修改类命令（/mute、/unmute、/types on|off、/alert、/unalert）在配置了 admin_user_ids 时只接受这些用户。
 """
 from __future__ import annotations
 
@@ -25,6 +25,9 @@ HELP = """<b>可用命令</b>
 /unmute 代码|all  取消静音
 /mutes 当前静音列表
 /params 当前触发门槛
+/types 异动类型开关；/types off 急拉急跌 [代码|分组]，/types on 急拉急跌 [代码|分组]
+/alert 自定义提醒，例如 /alert NVDA &gt; 140、/alert BTC 5m -2%、/alert NVDA 当日 5%（/alert 看完整写法）
+/alerts 自定义提醒列表；/unalert 编号|all 删除
 /report 立即生成最近 24 小时日报
 /trend [代码] 趋势状态；带代码看详情和支撑压力位，例如 /trend NVDA
 /help 本说明
@@ -54,6 +57,12 @@ class BotHooks(Protocol):
     async def unmute(self, target: str | None) -> int: ...
     async def report_text(self) -> str: ...
     async def trend_text(self, args: list[str]) -> str: ...
+    def types_text(self) -> str: ...
+    def resolve_target(self, s: str) -> str | None: ...
+    async def set_type(self, target: str, pattern: str, off: bool) -> None: ...
+    def alerts_text(self) -> str: ...
+    async def add_alert(self, args: list[str], by: str) -> str: ...
+    async def remove_alert(self, rule_id: int | None) -> int: ...
 
 
 async def run_command(
@@ -78,6 +87,43 @@ async def run_command(
         return await hooks.report_text()
     if cmd == "trend":
         return await hooks.trend_text(args)
+    if cmd == "types":
+        if not args:
+            return hooks.types_text()
+        if admins and user_id not in admins:
+            return "没有权限：只有配置里的管理员可以开关类型。"
+        from .patterns import PATTERN_LABELS, parse_pattern
+
+        action = args[0].lower()
+        if action not in ("on", "off", "开", "关") or len(args) < 2:
+            return "用法：/types off 急拉急跌 [代码|分组]、/types on 急拉急跌 [代码|分组]；不带参数看当前状态。"
+        pattern = parse_pattern(args[1])
+        if pattern is None:
+            return f"没有这个类型：{args[1]}。可用：{'、'.join(PATTERN_LABELS.values())}"
+        target = hooks.resolve_target(args[2]) if len(args) > 2 else "*"
+        if target is None:
+            return f"没找到标的或分组 {args[2]}。"
+        off = action in ("off", "关")
+        await hooks.set_type(target, pattern, off)
+        where = "全部标的" if target == "*" else target.replace("group:", "分组 ")
+        return f"已{'关闭' if off else '打开'}{where}的「{PATTERN_LABELS[pattern]}」。\n" + hooks.types_text()
+    if cmd == "alerts":
+        return hooks.alerts_text()
+    if cmd in ("alert", "unalert"):
+        if admins and user_id not in admins:
+            return "没有权限：只有配置里的管理员可以设置自定义提醒。"
+        if cmd == "alert":
+            return await hooks.add_alert(args, who)
+        if not args:
+            return "用法：/unalert 编号，或 /unalert all 删除全部。"
+        if args[0].lower() in ("all", "全部"):
+            n = await hooks.remove_alert(None)
+            return f"已删除全部 {n} 条自定义提醒。"
+        try:
+            rid = int(args[0].lstrip("#"))
+        except ValueError:
+            return "编号写得不对，/alerts 可以看编号。"
+        return "已删除。" if await hooks.remove_alert(rid) else f"没有编号 {rid} 的提醒。"
     if cmd in ("mute", "unmute"):
         if admins and user_id not in admins:
             return "没有权限：只有配置里的管理员可以静音或取消静音。"

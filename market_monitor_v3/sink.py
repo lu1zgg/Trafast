@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass, field
-from typing import Protocol
+from typing import Any, Protocol
 
-from .models import Bar, Decision, Episode, OutMsg, RootMessage
+from .models import Bar, Decision, Episode, OutMsg, RootMessage, SignalEvent
 
 
 class Sink(Protocol):
@@ -15,6 +15,8 @@ class Sink(Protocol):
     def episode(self, ep: Episode) -> None: ...
     def root(self, r: RootMessage) -> None: ...
     def out(self, m: OutMsg) -> None: ...
+    def signal(self, ev: SignalEvent) -> None: ...
+    def custom(self, rule: Any) -> None: ...
 
 
 @dataclass
@@ -24,9 +26,13 @@ class Effects:
     episodes: list[tuple[str, str, str, str, int, int | None]] = field(default_factory=list)  # 已序列化
     roots: list[tuple[str, str]] = field(default_factory=list)  # (key, json)
     outs: list[OutMsg] = field(default_factory=list)
+    signals: list[SignalEvent] = field(default_factory=list)
+    customs: list[tuple[int, str, int, str]] = field(default_factory=list)  # (id, symbol, enabled, json)
 
     def empty(self) -> bool:
-        return not (self.bars or self.decisions or self.episodes or self.roots or self.outs)
+        return not (
+            self.bars or self.decisions or self.episodes or self.roots or self.outs or self.signals or self.customs
+        )
 
 
 class BufferSink:
@@ -36,6 +42,8 @@ class BufferSink:
         self._episodes: dict[str, Episode] = {}
         self._roots: dict[str, RootMessage] = {}
         self._outs: list[OutMsg] = []
+        self._signals: list[SignalEvent] = []
+        self._customs: dict[int, Any] = {}
 
     def bar(self, b: Bar) -> None:
         self._bars.append(b)
@@ -52,6 +60,12 @@ class BufferSink:
     def out(self, m: OutMsg) -> None:
         self._outs.append(m)
 
+    def signal(self, ev: SignalEvent) -> None:
+        self._signals.append(ev)
+
+    def custom(self, rule: Any) -> None:
+        self._customs[rule.id] = rule
+
     def drain(self) -> Effects:
         """在事件循环线程里序列化，避免写库线程读到正在变化的对象。"""
         eff = Effects(
@@ -64,8 +78,14 @@ class BufferSink:
             ],
             roots=[(r.key, json.dumps(r.to_json(), ensure_ascii=False)) for r in self._roots.values()],
             outs=self._outs,
+            signals=self._signals,
+            customs=[
+                (r.id, r.symbol, int(r.enabled), json.dumps(r.to_json(), ensure_ascii=False))
+                for r in self._customs.values()
+            ],
         )
-        self._bars, self._decisions, self._outs = [], [], []
+        self._bars, self._decisions, self._outs, self._signals = [], [], [], []
+        self._customs = {}
         self._episodes, self._roots = {}, {}
         return eff
 

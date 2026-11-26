@@ -62,7 +62,8 @@ preset = "sensitive"            # sensitive 灵敏 / balanced 均衡 / conservat
 confirm_ratio = 0.6             # 下一根 K 线仍保留 60% 以上才推送
 fast_score = 2.0                # 得分 ≥ 2 直接推（L3）
 l2_score = 1.5
-l2_turnover_mult = 3.0
+l2_turnover_mult = 0             # V4 起默认 0 = 成交额放大不再升 L2（回测里没有区分度）；填 3 恢复 V3
+spike_extra_confirm = 2         # 急拉急跌（L1/L2）站稳后再等 2 根 K 线，每根都保留 60% 才推；L3 不等
 thin_turnover_frac = 0.25       # 夜盘和早盘前：窗口成交额不低于该时段中位数的 25%
 thin_pre_until = "07:00"        # 美东时间
 fast_confirm_sessions = ["PRE", "POST", "ON"]   # 盘外 L3 也等下一根 K 线确认（挡单根坏价）；盘中仍收盘即推
@@ -93,6 +94,8 @@ batch_delay_s = 8
 fast_batch_delay_s = 2
 max_new_per_min = 6
 expiry_s = 600                  # K 线收盘 10 分钟后还没发出去的告警直接丢弃
+group_window_s = 300            # 同一自选分组 5 分钟内同向确认的标的也并进同一条
+group_min = 3                   # 同一分组 ≥ 3 只时标题写“某某板块联动上涨 / 下跌”
 
 [stocks]
 # 长桥接通前先保持 false，只跑加密货币；接通步骤见 README「接通长桥（美股）」。
@@ -181,3 +184,11 @@ maintenance_time = "12:30"      # 北京时间，夜盘清淡时段
 
 [weekend_perp]
 enabled = false                 # 周末合约模块：louis 决定不开，本版本未实现
+
+# 自选分组（V4）：只影响联动标题、统计和按分组开关类型，不影响触发。写简称即可。
+[groups]
+"存储" = ["MU", "SNDK", "STX"]
+"芯片" = ["NVDA", "INTC"]
+"平台与汽车" = ["GOOGL", "META", "TSLA"]
+"能源与太空" = ["BE", "SPCX"]
+"加密" = ["BTC", "ETH", "SOL"]

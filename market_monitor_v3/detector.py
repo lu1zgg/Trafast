@@ -6,7 +6,9 @@ d_k = ln(P_t / P_{t-k})，k = 1, 5, 15 分钟，P 是 1 分钟收盘价。
 稀薄时段（夜盘、早盘前）还要求窗口成交额不低于该时段中位数的 25%，
 并且“走出这段位移的那几根 K 线”（按 |收益| 加权）的成交额也不低于这个比例。
 得分 = |d| / 门槛；只由直通线触发时 = 2·|d| / A。
-score ≥ 2 或触发直通 → 快速通道 L3；否则 score ≥ 1.5、多窗口同向或成交额 ≥ 3 倍常态 → L2；其余 L1。
+score ≥ 2 或触发直通 → 快速通道 L3；否则 score ≥ 1.5 或多窗口同向 → L2；其余 L1。
+（V3 的“成交额 ≥ 3 倍常态 → L2”在 V4 默认关闭，rules.l2_turnover_mult > 0 时恢复。）
+候选最后交给 patterns.classify 打上形态类型和放量标签（V4），不改变是否触发和级别。
 """
 from __future__ import annotations
 
@@ -16,6 +18,7 @@ from collections.abc import Callable
 from .baseline import Baselines
 from .config import WINDOWS, Params
 from .models import Bar, Candidate, Evaluation, WindowHit, market_of
+from .patterns import classify
 from .windows import SymbolHistory
 
 
@@ -113,7 +116,11 @@ def evaluate(
     elif (
         primary.score >= rules.l2_score
         or len(same) >= 2
-        or (primary.turnover_ratio is not None and primary.turnover_ratio >= rules.l2_turnover_mult)
+        or (
+            rules.l2_turnover_mult > 0
+            and primary.turnover_ratio is not None
+            and primary.turnover_ratio >= rules.l2_turnover_mult
+        )
     ):
         level = "L2"
     else:
@@ -133,4 +140,8 @@ def evaluate(
         level=level,
         warmup=warmup,
     )
+    info = classify(cand, bar, hist, params, baselines)
+    cand.pattern = info.pattern
+    cand.tags = info.tags
+    cand.reason = info.reason()
     return Evaluation(cand, thin_blocked)

@@ -1,71 +1,71 @@
 {
- "rule_version": "v3.0-灵敏-93269a57",
+ "rule_version": "v4.0-灵敏-1e2ec3c7",
  "messages": [
   {
    "kind": "send",
    "key": "g1776693840CuETH",
    "parent": "",
-   "first_line": "🟢 ETH +1.2%｜5 分钟｜L1 异动"
+   "first_line": "🟢 ETH +1.2%｜盘整突破｜L1 异动"
   },
   {
    "kind": "edit",
    "key": "g1776693840CuETH:e1",
    "parent": "g1776693840CuETH",
-   "first_line": "🟢 ETH +1.2%｜5 分钟｜L1 异动"
+   "first_line": "🟢 ETH +1.2%｜盘整突破｜L1 异动"
   },
   {
    "kind": "send",
-   "key": "g1776736920CdBTC",
+   "key": "g1776736920CdETH",
    "parent": "",
-   "first_line": "🔴 SOL -1.1%｜1 分钟｜L2 显著"
+   "first_line": "🔴 SOL -1.1%｜平台跳水｜L2 显著"
   },
   {
    "kind": "edit",
-   "key": "g1776736920CdBTC:e1",
-   "parent": "g1776736920CdBTC",
-   "first_line": "🔴 SOL -1.1%｜1 分钟｜L2 显著"
+   "key": "g1776736920CdETH:e1",
+   "parent": "g1776736920CdETH",
+   "first_line": "⚡ 加密板块联动下跌（3 只）"
   },
   {
    "kind": "edit",
-   "key": "g1776736920CdBTC:e2",
-   "parent": "g1776736920CdBTC",
-   "first_line": "🔴 SOL -1.1%｜1 分钟｜L2 显著"
+   "key": "g1776736920CdETH:e2",
+   "parent": "g1776736920CdETH",
+   "first_line": "⚡ 加密板块联动下跌（3 只）"
   },
   {
    "kind": "edit",
-   "key": "g1776736920CdBTC:e3",
-   "parent": "g1776736920CdBTC",
-   "first_line": "🔴 SOL -1.1%｜1 分钟｜L2 显著"
+   "key": "g1776736920CdETH:e3",
+   "parent": "g1776736920CdETH",
+   "first_line": "⚡ 加密板块联动下跌（3 只）"
+  },
+  {
+   "kind": "edit",
+   "key": "g1776736920CdETH:e4",
+   "parent": "g1776736920CdETH",
+   "first_line": "⚡ 加密板块联动下跌（3 只）"
   },
   {
    "kind": "send",
-   "key": "g1776781920UdNVDA",
+   "key": "g1776781980UdNVDA",
    "parent": "",
-   "first_line": "🔴 NVDA -0.73%｜1 分钟｜L2 显著"
+   "first_line": "🔴 NVDA -0.73%｜急跌｜L3 剧烈"
   },
   {
    "kind": "reply",
    "key": "NVDA-1776781860:r1",
-   "parent": "g1776781920UdNVDA",
-   "first_line": "↳ 延伸：🔴 NVDA -2.2%（3 分钟）｜现价 $184.88｜升级 L3 剧烈"
-  },
-  {
-   "kind": "reply",
-   "key": "NVDA-1776781860:r2",
-   "parent": "g1776781920UdNVDA",
+   "parent": "g1776781980UdNVDA",
    "first_line": "↳ 延伸：🔴 NVDA -3.5%（8 分钟）｜现价 $182.50"
   },
   {
    "kind": "edit",
-   "key": "g1776781920UdNVDA:e1",
-   "parent": "g1776781920UdNVDA",
-   "first_line": "🔴 NVDA -0.73%｜1 分钟｜L2 显著"
+   "key": "g1776781980UdNVDA:e1",
+   "parent": "g1776781980UdNVDA",
+   "first_line": "🔴 NVDA -0.73%｜急跌｜L3 剧烈"
   },
   {
    "kind": "send",
    "key": "g1776857520UuNVDA",
    "parent": "",
-   "first_line": "🟢 NVDA +0.87%｜1 分钟｜L2 显著"
+   "first_line": "🟢 NVDA +0.87%｜盘整突破｜L2 显著"
   },
   {
    "kind": "reply",
@@ -77,7 +77,7 @@
    "kind": "edit",
    "key": "g1776857520UuNVDA:e1",
    "parent": "g1776857520UuNVDA",
-   "first_line": "🟢 NVDA +0.87%｜1 分钟｜L2 显著"
+   "first_line": "🟢 NVDA +0.87%｜盘整突破｜L2 显著"
   }
  ]
 }

@@ -55,9 +55,16 @@ def test_two_windows_make_l2():
     assert {h.k for h in c.hits} >= {1, 5} and c.level == "L2"
 
 
-def test_turnover_makes_l2():
+def test_turnover_no_longer_makes_l2():
+    # V4 默认去掉“成交额 ≥ 3 倍 → L2”；配置 l2_turnover_mult = 3 可以恢复 V3 的行为
     c = run("BTCUSDT", [100] * 20 + [100.6], BL, last_turnover=3.5e6).candidate
-    assert c.level == "L2" and c.primary.turnover_ratio >= 3
+    assert c.level == "L1" and c.primary.turnover_ratio >= 3
+    global P
+    old, P = P, Params(make_cfg(rules={"l2_turnover_mult": 3.0}))
+    try:
+        assert run("BTCUSDT", [100] * 20 + [100.6], BL, last_turnover=3.5e6).candidate.level == "L2"
+    finally:
+        P = old
 
 
 def test_volume_only_spike_never_triggers():

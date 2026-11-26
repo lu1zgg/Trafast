@@ -3,17 +3,18 @@
 正文统一写成 Telegram 支持的 HTML 子集（<b> <i> <code> <a>），其他推送渠道再各自转换
 （Discord 见 notifiers/discord.py 的 html_to_markdown）。
 
-一条告警卡片的样子（Telegram 里 <b> 显示为加粗）：
+一条告警卡片的样子（Telegram 里 <b> 显示为加粗；V4 起标题写形态类型，下一行写分类依据）：
 
-    🔴 NVDA -1.9%｜1 分钟｜L3 剧烈
+    🔴 NVDA -1.9%｜平台跳水｜L3 剧烈
     现价 $134.03（盘前）｜起点 $136.66
+    异动前 10 分钟振幅 0.3%，之后 4 分钟跌 1.9%
     快速通道：位移很大，收盘即推
     ────────────────
     多窗口
     1 分钟 -1.9%｜5 分钟 -2.4%｜15 分钟 -2.7%
     ────────────────
     成交额
-    1 分钟 $3.62M｜该时段常态的 2.1 倍
+    1 分钟 $3.62M｜该时段常态的 2.1 倍｜放量
     ────────────────
     北京 11-23 17:38｜美东 04:38
 
@@ -30,6 +31,7 @@ from zoneinfo import ZoneInfo
 
 from .config import SESSION_LABELS
 from .models import LEVEL_NAMES, Candidate, Episode, display_name
+from .patterns import pattern_name, reason_text
 from .sessions import ET
 
 BJ = ZoneInfo("Asia/Shanghai")
@@ -111,7 +113,15 @@ def esc(s: str) -> str:
 
 
 # ---- 告警卡片 ----
-def card_from(c: Candidate, level: str, retained: float | None, current_price: float, close_ts: int, ep_id: str = "") -> dict[str, Any]:
+def card_from(
+    c: Candidate,
+    level: str,
+    retained: float | None,
+    current_price: float,
+    close_ts: int,
+    ep_id: str = "",
+    confirm_bars: int = 1,
+) -> dict[str, Any]:
     """把一次触发整理成可序列化的卡片数据。retained 为 None 表示走了快速通道。
 
     卡片存进 roots 表，事件结束或有新标的加入时整条消息按卡片重新渲染。
@@ -134,15 +144,19 @@ def card_from(c: Candidate, level: str, retained: float | None, current_price: f
         "turnover_ratio": p.turnover_ratio,
         "close_ts": close_ts,
         "end": None,
+        "pattern": c.pattern,
+        "tags": list(c.tags),
+        "reason": dict(c.reason),
+        "confirm_bars": confirm_bars,
     }
 
 
 def card_headline(card: dict[str, Any]) -> str:
     level = card["level"]
-    return (
-        f"{icon(card['direction'])} {b(esc(display_name(card['symbol'])))} {b(pct(card['d']))}"
-        f"｜{card['k']} 分钟｜{level} {LEVEL_NAMES[level]}"
-    )
+    kind = pattern_name(card.get("pattern"), card["direction"])
+    # 升级前存进数据库的卡片没有类型：仍按 V3 写窗口分钟数
+    mid = esc(kind) if kind else f"{card['k']} 分钟"
+    return f"{icon(card['direction'])} {b(esc(display_name(card['symbol'])))} {b(pct(card['d']))}｜{mid}｜{level} {LEVEL_NAMES[level]}"
 
 
 def card_text(card: dict[str, Any]) -> str:
@@ -151,11 +165,19 @@ def card_text(card: dict[str, Any]) -> str:
     sess = SESSION_LABELS.get(card["session"], card["session"])
     sess_txt = f"（{sess}）" if card["market"] == "US" else ""
     lines.append(f"现价 {b(usd(card['price']))}{sess_txt}｜起点 {b(usd(card['p0']))}")
+    if card.get("pattern"):
+        why = reason_text(card["pattern"], card["direction"], card["k"], card["d"], card.get("reason") or {})
+        if why:
+            lines.append(esc(why))
     if card["retained"] is None:
         lines.append("快速通道：位移很大，收盘即推")
     else:
         kept = f"{card['retained'] * 100:.0f}%"
-        lines.append(f"站稳：下一分钟仍保留 {b(kept)}")
+        n = card.get("confirm_bars") or 1
+        if n > 1:
+            lines.append(f"站稳：之后 {n} 分钟都保留 ≥ {b(kept)}")
+        else:
+            lines.append(f"站稳：下一分钟仍保留 {b(kept)}")
     hits = card.get("hits") or []
     if len(hits) > 1:
         lines += [DIVIDER, "多窗口", "｜".join(f"{k} 分钟 {b(pct(d))}" for k, d in hits)]
@@ -164,6 +186,8 @@ def card_text(card: dict[str, Any]) -> str:
         if card.get("turnover_ratio") is not None:
             ratio = f"{card['turnover_ratio']:.1f} 倍"
             t += f"｜该时段常态的 {b(ratio)}"
+        if "vol" in (card.get("tags") or []):
+            t += "｜" + b("放量")
         lines += [DIVIDER, "成交额", t]
     lines += [DIVIDER, times_line(card["close_ts"], card["market"])]
     if card.get("end"):
@@ -179,9 +203,10 @@ def card_compact(card: dict[str, Any]) -> str:
     return s
 
 
-def cards_text(cards: list[dict[str, Any]]) -> str:
-    """整条联动消息：第一张卡片是触发最强的标的，其余在“同时异动”下面逐个完整展开。"""
-    parts = [card_text(cards[0])]
+def cards_text(cards: list[dict[str, Any]], title: str = "") -> str:
+    """整条联动消息：第一张卡片是触发最强的标的，其余在“同时异动”下面逐个完整展开。
+    title 是分组联动的标题（如“存储板块联动下跌”），放在最上面。"""
+    parts = [b(esc(title)), card_text(cards[0])] if title else [card_text(cards[0])]
     rest = cards[1:]
     if rest:
         parts += [GROUP_DIVIDER, b(f"同时异动（{len(rest)}）")]
@@ -239,10 +264,15 @@ def member_item(c: Candidate) -> str:
 
 
 def joiner_reply(c: Candidate, level: str) -> str:
+    kind = pattern_name(c.pattern, c.direction) or f"{c.primary.k} 分钟"
     return (
         f"↳ 联动升级：{icon(c.direction)} {b(esc(display_name(c.symbol)))} {b(pct(c.primary.d))}"
-        f"｜{c.primary.k} 分钟｜{level} {LEVEL_NAMES[level]}｜现价 {b(usd(c.price))}"
+        f"｜{esc(kind)}｜{level} {LEVEL_NAMES[level]}｜现价 {b(usd(c.price))}"
     )
+
+
+def group_title(group: str, direction: int, n: int) -> str:
+    return f"⚡ {group}板块联动{'上涨' if direction > 0 else '下跌'}（{n} 只）"
 
 
 def extension_reply(ep: Episode, move: float, minutes: int, upgrade: str | None) -> str:
@@ -265,9 +295,10 @@ def summary_header(n: int) -> str:
 
 
 def summary_line(c: Candidate, level: str, current_price: float, others: list[str]) -> str:
+    kind = pattern_name(c.pattern, c.direction) or f"{c.primary.k} 分钟"
     s = (
         f"{icon(c.direction)} {b(esc(display_name(c.symbol)))} {b(pct(c.primary.d))}"
-        f"｜{c.primary.k} 分钟｜{level}｜现价 {b(usd(current_price))}"
+        f"｜{esc(kind)}｜{level}｜现价 {b(usd(current_price))}"
     )
     if others:
         s += "\n    同时：" + "、".join(others)

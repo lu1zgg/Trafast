@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 from .config import CRYPTO_SESSIONS, SESSION_LABELS, STOCK_SESSIONS, AppConfig, Params
 from .models import display_name, market_of
+from .patterns import PATTERN_LABELS, PATTERNS
 from .render import pct
 from .sessions import UsCalendar
 from .store import Store
@@ -21,6 +22,8 @@ OUTCOME_LABELS = {
     "cooldown": "冷却期",
     "muted": "静音",
     "expired_pending": "确认超时",
+    "spike_rejected": "急拉急跌多确认没站稳",
+    "type_off": "类型已关闭",
 }
 
 
@@ -59,6 +62,17 @@ def build_daily_report(store: Store, cfg: AppConfig, params: Params, cal: UsCale
         f"异动：美股 {us} 个" + (f"（{us_detail}）" if us_detail else "") + f"，加密 {cr} 个；"
         f"L3 {levels['L3']}、L2 {levels['L2']}、L1 {levels['L1']}"
     )
+
+    # V4 形态类型（只统计，推送规则不变）
+    kinds: dict[str, int] = defaultdict(int)
+    for r in c.execute(
+        "SELECT pattern, COUNT(*) AS n FROM alerts WHERE ts>=? AND ts<? AND outcome='pushed' AND pattern IS NOT NULL "
+        "GROUP BY pattern",
+        (int(start), int(end)),
+    ):
+        kinds[r["pattern"]] = r["n"]
+    if kinds:
+        lines.append("类型：" + "，".join(f"{PATTERN_LABELS[p]} {kinds[p]}" for p in PATTERNS if kinds.get(p)))
 
     # 消息
     sent: dict[str, dict[str, int]] = defaultdict(lambda: {"send": 0, "reply": 0})

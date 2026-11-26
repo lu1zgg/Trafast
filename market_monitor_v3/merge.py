@@ -1,6 +1,7 @@
 """联动合并与限流。
 
 - 同一市场、同一方向、3 分钟内确认的多个标的并成一条“联动”消息。
+- V4 分组联动：同一自选分组的标的 5 分钟内都能并进来；同一分组同向 ≥ 3 只时，标题写“某某板块联动上涨 / 下跌”。
 - 首条等一个很短的批次窗口（L3 约 2 秒，其余约 8 秒）再发，让同一分钟收盘的标的进同一条。
 - 已经发出后才加入的标的：静默编辑原消息补进“同时”一行；如果它是 L3 而原消息级别更低，另外回复一条。
 - 全局每分钟最多发 6 条新消息，超出的合并成一条摘要。
@@ -8,7 +9,8 @@
 """
 from __future__ import annotations
 
-from collections import deque
+from collections import Counter, deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from . import render
@@ -25,6 +27,7 @@ class OpenAlert:
     retained: float | None
     price: float
     close_ts: int
+    confirm_bars: int = 1
 
 
 @dataclass
@@ -42,7 +45,7 @@ class Group:
 
 
 def _card(m: OpenAlert) -> dict:
-    return render.card_from(m.cand, m.level, m.retained, m.price, m.close_ts, ep_id=m.ep.id)
+    return render.card_from(m.cand, m.level, m.retained, m.price, m.close_ts, ep_id=m.ep.id, confirm_bars=m.confirm_bars)
 
 
 def _lead(members: list[OpenAlert]) -> OpenAlert:
@@ -58,15 +61,19 @@ class Merger:
         self.roots: dict[str, RootMessage] = {}
         self.sent: deque[float] = deque()
         self.held: list[Group] = []
+        # 标的 → 所在的自选分组；由引擎按配置设置
+        self.groups_of: Callable[[str], list[str]] = lambda symbol: []
 
     # ---- 入口 ----
     def add(self, oa: OpenAlert, now: float) -> None:
         mc = self.params.merge
         for g in self.groups:
+            dt = oa.close_ts - g.first_close_ts
             if (
                 g.market == oa.cand.market
                 and g.direction == oa.cand.direction
-                and 0 <= oa.close_ts - g.first_close_ts <= mc.window_s
+                and 0 <= dt
+                and (dt <= mc.window_s or (dt <= mc.group_window_s and self._shares_group(g, oa)))
             ):
                 if not g.flushed:
                     g.members.append(oa)
@@ -93,7 +100,7 @@ class Merger:
                     self.held.append(g)
         if self.held and self._budget_left(now) > 0:
             self._emit_summary(now)
-        keep = self.params.merge.window_s + 120
+        keep = max(self.params.merge.window_s, self.params.merge.group_window_s) + 120
         self.groups = [g for g in self.groups if not (g.flushed and now - g.flushed_at > keep)]
 
     def end_episode(self, ep: Episode, now: float) -> None:
@@ -118,6 +125,23 @@ class Merger:
             self.roots[r.key] = r
 
     # ---- 内部 ----
+    def _shares_group(self, g: Group, oa: OpenAlert) -> bool:
+        mine = set(self.groups_of(oa.cand.symbol))
+        return bool(mine) and any(mine & set(self.groups_of(m.cand.symbol)) for m in g.members)
+
+    def _title(self, members: list[OpenAlert], direction: int) -> str:
+        """同一分组同向的标的达到 group_min 只：标题写分组名（取人数最多的分组）。"""
+        count: Counter[str] = Counter()
+        for m in members:
+            for grp in set(self.groups_of(m.cand.symbol)):
+                count[grp] += 1
+        if not count:
+            return ""
+        grp, n = count.most_common(1)[0]
+        if n < self.params.merge.group_min:
+            return ""
+        return render.group_title(grp, direction, n)
+
     def _budget_left(self, now: float) -> int:
         while self.sent and now - self.sent[0] >= 60:
             self.sent.popleft()
@@ -137,6 +161,7 @@ class Merger:
             symbols=[m.cand.symbol for m in g.members],
             buttons=render.feedback_buttons(g.key) if self.buttons else None,
             cards=[_card(m) for m in [lead, *others]],
+            title=self._title(g.members, g.direction),
         )
         g.lead, g.flushed, g.flushed_at = lead, True, now
         self.roots[g.key] = root
@@ -213,6 +238,7 @@ class Merger:
         root.symbols.append(oa.cand.symbol)
         if root.cards:
             root.cards.append(_card(oa))
+            root.title = self._title(g.members, g.direction)
         else:
             root.members.append(render.member_item(oa.cand))
         if g.lead is not None and oa.level == "L3" and LEVEL_RANK["L3"] > LEVEL_RANK[g.lead.level]:

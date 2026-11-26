@@ -7,9 +7,15 @@ from market_monitor_v3.models import Bar
 from market_monitor_v3.outbox import ChatRef, OutboxSender
 from market_monitor_v3.store import Store
 from tests.fakes import FakeTelegram
-from tests.helpers import Harness, utc_ts
+from tests.helpers import Harness
 
 S = "BTCUSDT"
+
+
+def recent_t0() -> int:
+    """种子 K 线正好在现在结束：发件箱按真实时钟判断过期（10 分钟），固定日期的行情过一天就全部过期。"""
+    now = int(time.time())
+    return now - now % 60 - 30 * 60
 
 
 async def pump(h: Harness, store: Store, sender: OutboxSender):
@@ -45,7 +51,7 @@ def feed(h, ts, c):
 async def test_alert_reply_and_end_edit_thread_correctly(chain, tmp_path):
     store, fake, sender = chain
     h = Harness()
-    t0 = utc_ts(2026, 11, 24, 3, 0)
+    t0 = recent_t0()
     t = h.seed(S, t0, 100.0)
     feed(h, t, 101.2)  # L3
     await pump(h, store, sender)
@@ -73,7 +79,7 @@ async def test_alert_reply_and_end_edit_thread_correctly(chain, tmp_path):
 async def test_restart_restores_active_episode(chain):
     store, fake, sender = chain
     h = Harness()
-    t0 = utc_ts(2026, 11, 24, 3, 0)
+    t0 = recent_t0()
     t = h.seed(S, t0, 100.0)
     feed(h, t, 101.2)
     await pump(h, store, sender)

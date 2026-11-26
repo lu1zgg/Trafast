@@ -54,6 +54,7 @@ class Harness:
         self.engine = Engine(self.cfg, self.params, self.cal, self.baselines, self.sink, alive=lambda m, n: alive)
         self.outs = []
         self.decisions = []
+        self.signals = []
 
     def seed(self, symbol: str, start_ts: int, price: float, n: int = 30, turnover: float = 1e6) -> int:
         bars = []
@@ -94,6 +95,7 @@ class Harness:
         eff = self.sink.drain()
         self.outs.extend(eff.outs)
         self.decisions.extend(eff.decisions)
+        self.signals.extend(eff.signals)
 
     def sends(self):
         return [o for o in self.outs if o.kind == "send"]

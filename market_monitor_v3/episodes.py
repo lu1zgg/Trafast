@@ -2,6 +2,9 @@
 
 - 待确认：候选出现后等下一根 K 线，位移保留 ≥ 60% 才推送；否则记 L0（这一步挡掉插针）。
 - 快速通道（L3）不等确认。
+- V4：急拉急跌（L1 / L2）普通确认之后再等 rules.spike_extra_confirm 根 K 线，每根都保留 ≥ 60% 才推，
+  任何一根没站稳记 L0（spike_rejected）。等待期间同方向的新候选并进来（confirming），只可能升级。
+- V4：被关掉的类型（/types）在推送前记 L0（type_off），不推送。
 - 进行中：同方向再走 ≥ 1 个 5 分钟地板算“延伸”，回复在原消息下；级别升高也回复。
   每个事件最多 3 条回复，间隔 ≥ 5 分钟（升到 L3 不受间隔限制）。
 - 结束：从最大位移回撤超过一半，或 30 分钟没有新高（新低），或出现反向的 L3。
@@ -18,7 +21,7 @@ from dataclasses import dataclass
 from . import render
 from .config import WINDOWS, Params
 from .merge import Merger, OpenAlert
-from .models import LEVEL_RANK, Bar, Candidate, Decision, Episode, Evaluation, OutMsg, WindowHit, display_name
+from .models import LEVEL_RANK, Bar, Candidate, Decision, Episode, Evaluation, OutMsg, SignalEvent, WindowHit, display_name
 from .sink import Sink
 
 
@@ -33,6 +36,9 @@ class Tracker:
     guard_until: int = 0
     guard_dir: int = 0
     guard_anchor: float = 0.0
+    # V4 急拉急跌多确认：已经额外确认了几根、期间最低的保留比例
+    pending_checks: int = 0
+    pending_min_ret: float = 1.0
 
 
 RETRACE_EXTRA_S = max(WINDOWS) * 60
@@ -46,12 +52,14 @@ class EpisodeManager:
         sink: Sink,
         is_muted: Callable[[str, float], bool],
         silent_ext: bool = False,
+        type_off: Callable[[str, str], bool] = lambda symbol, pattern: False,
     ):
         self.params = params
         self.merger = merger
         self.sink = sink
         self.is_muted = is_muted
         self.silent_ext = silent_ext
+        self.type_off = type_off
         self.trackers: dict[str, Tracker] = {}
 
     def tracker(self, sym: str) -> Tracker:
@@ -84,7 +92,8 @@ class EpisodeManager:
         # 1. 待确认的候选：看这一根 K 线是否站稳
         if tr.pending is not None and bar.ts > tr.pending.bar_ts:
             p, tr.pending = tr.pending, None
-            if bar.ts - p.bar_ts > ecfg.pending_max_wait_min * 60:
+            checks, tr.pending_checks = tr.pending_checks, 0
+            if bar.ts - p.bar_ts > (ecfg.pending_max_wait_min + checks) * 60:
                 self._decide(p, "expired_pending", "L0")
             else:
                 retained = p.direction * math.log(bar.c / p.primary.p0) / abs(p.primary.d)
@@ -92,15 +101,23 @@ class EpisodeManager:
                     level = p.level
                     if cand is not None and cand.direction == p.direction and LEVEL_RANK[cand.level] > LEVEL_RANK[level]:
                         level = cand.level
-                    if self.is_muted(sym, now):
+                    min_ret = min(retained, tr.pending_min_ret) if checks else retained
+                    if checks < self._extra_needed(p, level):
+                        # 急拉急跌：再等一根
+                        p.level = level
+                        tr.pending, tr.pending_checks, tr.pending_min_ret = p, checks + 1, min_ret
+                        if cand is not None and cand.direction == p.direction:
+                            self._decide(cand, "confirming", "L0")
+                            cand = None
+                    elif self.is_muted(sym, now):
                         self._decide(p, "muted", "L0", retained)
                     else:
-                        self._open(tr, p, level, retained, bar, now)
+                        self._push(tr, p, level, min_ret, bar, now, confirm_bars=checks + 1)
                         if cand is not None and cand.direction == p.direction and tr.episode is not None:
                             self._decide(cand, "absorbed", "L0", episode_id=tr.episode.id)
                             cand = None
                 else:
-                    self._decide(p, "rejected", "L0", retained)
+                    self._decide(p, "spike_rejected" if checks else "rejected", "L0", retained)
                     tr.guard_until = bar.close_ts + 15 * 60
                     tr.guard_dir = p.direction
                     tr.guard_anchor = p.primary.p0
@@ -111,6 +128,18 @@ class EpisodeManager:
                 cand = None
 
         # 3. 新候选
+        if cand is not None and tr.pending is not None and tr.pending_checks > 0:
+            # 急拉急跌还在多确认：同方向的并进去（只升级），否则放弃等待、按新候选处理
+            p = tr.pending
+            fast_now = cand.fast and cand.session not in self.params.rules.fast_confirm_sessions
+            if cand.direction == p.direction and not fast_now:
+                if LEVEL_RANK[cand.level] > LEVEL_RANK[p.level]:
+                    p.level = cand.level
+                self._decide(cand, "confirming", "L0")
+                cand = None
+            else:
+                tr.pending, tr.pending_checks = None, 0
+                self._decide(p, "superseded", "L0")
         if cand is not None:
             if tr.episode is not None:
                 self._decide(cand, "absorbed", "L0", episode_id=tr.episode.id)
@@ -133,7 +162,7 @@ class EpisodeManager:
                 # 插针收回来的那一段，不算反方向异动
                 self._decide(cand, "wick_return", "L0")
             elif cand.fast and cand.session not in self.params.rules.fast_confirm_sessions:
-                self._open(tr, cand, "L3", None, bar, now)
+                self._push(tr, cand, "L3", None, bar, now)
             else:
                 # 盘外的快速通道也先确认：单根坏价下一分钟就回去了
                 tr.pending = cand
@@ -146,8 +175,8 @@ class EpisodeManager:
         ecfg = self.params.episode
         for tr in self.trackers.values():
             p = tr.pending
-            if p is not None and now - p.close_ts > ecfg.pending_max_wait_min * 60 + 60:
-                tr.pending = None
+            if p is not None and now - p.close_ts > (ecfg.pending_max_wait_min + tr.pending_checks) * 60 + 60:
+                tr.pending, tr.pending_checks = None, 0
                 self._decide(p, "expired_pending", "L0")
             ep = tr.episode
             if ep is not None and now - ep.last_extreme_at >= ecfg.idle_end_min * 60 + 120:
@@ -155,7 +184,23 @@ class EpisodeManager:
                 self._end(tr, "idle", move, ep.last_extreme_at, now)
 
     # ---- 内部 ----
-    def _open(self, tr: Tracker, c: Candidate, level: str, retained: float | None, bar: Bar, now: float) -> None:
+    def _extra_needed(self, c: Candidate, level: str) -> int:
+        """急拉急跌（L1 / L2）还要多确认几根；L3 保留快速通道。"""
+        if c.pattern == "spike" and level != "L3":
+            return self.params.rules.spike_extra_confirm
+        return 0
+
+    def _push(
+        self, tr: Tracker, c: Candidate, level: str, retained: float | None, bar: Bar, now: float, confirm_bars: int = 1
+    ) -> None:
+        if c.pattern and self.type_off(c.symbol, c.pattern):
+            self._decide(c, "type_off", "L0", retained)
+            return
+        self._open(tr, c, level, retained, bar, now, confirm_bars)
+
+    def _open(
+        self, tr: Tracker, c: Candidate, level: str, retained: float | None, bar: Bar, now: float, confirm_bars: int = 1
+    ) -> None:
         p = c.primary
         move_now = c.direction * math.log(bar.c / p.p0)
         extreme = max(abs(p.d), move_now)
@@ -178,11 +223,14 @@ class EpisodeManager:
             last_msg_at=now,
             last_extreme_at=bar.close_ts,
             last_price=bar.c,
+            pattern=c.pattern,
+            tags=list(c.tags),
         )
         tr.episode = ep
         self._decide(c, "pushed", level, retained, ep.id)
-        self.merger.add(OpenAlert(ep, c, level, retained, bar.c, bar.close_ts), now)
+        self.merger.add(OpenAlert(ep, c, level, retained, bar.c, bar.close_ts, confirm_bars), now)
         self.sink.episode(ep)
+        self._signal(ep, "open", bar, move_now, score=c.score, retained=retained, reason=c.reason)
 
     def _update(self, tr: Tracker, bar: Bar, cand: Candidate | None, now: float) -> bool:
         ep = tr.episode
@@ -231,6 +279,7 @@ class EpisodeManager:
                 ep.last_msg_at = now
                 if upgrade:
                     ep.level = upgrade
+                self._signal(ep, "upgrade" if upgrade else "extend", bar, move, score=cand.score if consumed and cand else None)
         if consumed and cand is not None:
             self._decide(cand, "absorbed", "L0", episode_id=ep.id)
         self.sink.episode(ep)
@@ -249,6 +298,63 @@ class EpisodeManager:
         tr.cooldown_anchor = ep.anchor
         self.merger.end_episode(ep, now)
         self.sink.episode(ep)
+        self.sink.signal(
+            SignalEvent(
+                id=f"{ep.id}:end",
+                ts=int(end_ts),
+                kind="end",
+                symbol=ep.symbol,
+                market=ep.market,
+                session=ep.session,
+                direction=ep.direction,
+                level=ep.level,
+                pattern=ep.pattern,
+                tags=list(ep.tags),
+                price=ep.last_price,
+                anchor=ep.anchor,
+                move=move,
+                k=ep.k,
+                score=None,
+                episode_id=ep.id,
+                rule_version=self.params.rule_version,
+                end_reason=reason,
+            )
+        )
+
+    def _signal(
+        self,
+        ep: Episode,
+        kind: str,
+        bar: Bar,
+        move: float,
+        score: float | None = None,
+        retained: float | None = None,
+        reason: dict[str, float | None] | None = None,
+    ) -> None:
+        seq = "open" if kind == "open" else f"r{ep.replies}"
+        self.sink.signal(
+            SignalEvent(
+                id=f"{ep.id}:{seq}",
+                ts=bar.close_ts,
+                kind=kind,
+                symbol=ep.symbol,
+                market=ep.market,
+                session=bar.session or ep.session,
+                direction=ep.direction,
+                level=ep.level,
+                pattern=ep.pattern,
+                tags=list(ep.tags),
+                price=bar.c,
+                anchor=ep.anchor,
+                move=move,
+                k=ep.k,
+                score=score,
+                episode_id=ep.id,
+                rule_version=self.params.rule_version,
+                retained=retained,
+                reason=dict(reason or {}),
+            )
+        )
 
     def _sess(self, bar: Bar, ep: Episode) -> str:
         return bar.session if bar.session in self.params.sessions else ep.session
@@ -288,6 +394,7 @@ class EpisodeManager:
                 turnover_ratio=p.turnover_ratio,
                 episode_id=episode_id,
                 rule_version=self.params.rule_version,
+                pattern=c.pattern or None,
             )
         )
 

@@ -84,6 +84,10 @@ class Candidate:
     fast: bool
     level: str
     warmup: bool = False
+    # V4：形态分类（patterns.classify），只用于命名和统计，不影响是否触发
+    pattern: str = ""
+    tags: list[str] = field(default_factory=list)
+    reason: dict[str, float | None] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -118,6 +122,8 @@ class Episode:
     end_reason: str | None = None
     ended_at: int | None = None
     end_move: float | None = None
+    pattern: str = ""
+    tags: list[str] = field(default_factory=list)
 
     def to_json(self) -> dict[str, Any]:
         return asdict(self)
@@ -147,6 +153,39 @@ class Decision:
     turnover_ratio: float | None = None
     episode_id: str | None = None
     rule_version: str = ""
+    pattern: str | None = None
+
+
+@dataclass
+class SignalEvent:
+    """V4 结构化信号：引擎每次推送（首发、延伸、升级）和事件结束都产出一条。
+
+    推送文本仍由 render 生成；这条记录给回放统计、以后的 /api/v1 和桌面版用，字段只增不改。
+    """
+
+    id: str  # {episode_id}:{seq}
+    ts: int  # 对应 K 线的收盘时间
+    kind: str  # open / extend / upgrade / end
+    symbol: str
+    market: str
+    session: str
+    direction: int
+    level: str
+    pattern: str
+    tags: list[str]
+    price: float
+    anchor: float  # 起点价
+    move: float  # 相对起点的对数位移（与方向同号为正）
+    k: int
+    score: float | None
+    episode_id: str
+    rule_version: str
+    retained: float | None = None
+    end_reason: str | None = None
+    reason: dict[str, float | None] = field(default_factory=dict)
+
+    def to_json(self) -> dict[str, Any]:
+        return asdict(self)
 
 
 @dataclass
@@ -182,12 +221,13 @@ class RootMessage:
     # 新版卡片：每个标的一张，见 render.card_from。为空时按旧版字段（lead_html + members + end_lines）渲染，
     # 兼容升级前存进数据库的消息和“异动过多”摘要。
     cards: list[dict[str, Any]] = field(default_factory=list)
+    title: str = ""  # V4 分组联动标题
 
     def text(self) -> str:
         if self.cards:
             from .render import cards_text
 
-            return cards_text(self.cards)
+            return cards_text(self.cards, self.title)
         parts = [self.lead_html]
         if self.members:
             parts.append("同时：" + "，".join(self.members))
