@@ -243,7 +243,7 @@ SLASH_COMMANDS: list[dict[str, Any]] = [
         "name": "mute",
         "description": "静音一个标的",
         "options": [
-            {"type": 3, "name": "symbol", "description": "代码，例如 MU、BTC；all 表示全部", "required": True},
+            {"type": 3, "name": "symbol", "description": "代码，例如 MU、BTC、XAU；all 表示全部；美股 / 加密 / 大宗商品 表示整个市场", "required": True},
             {"type": 3, "name": "duration", "description": "时长，例如 30m、2h、1d（默认 1h，最长 7d）", "required": False},
         ],
     },

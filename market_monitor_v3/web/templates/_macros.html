@@ -45,6 +45,7 @@
     {{ check(prefix ~ "_alerts", r.alerts, "异动告警") }}
     {{ check(prefix ~ "_m_US", "US" in r.markets, "美股") }}
     {{ check(prefix ~ "_m_CRYPTO", "CRYPTO" in r.markets, "加密货币") }}
+    {{ check(prefix ~ "_m_CMDTY", "CMDTY" in r.markets, "大宗商品") }}
   </div>
   <div class="row">
     <div class="field">

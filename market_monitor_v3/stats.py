@@ -9,10 +9,9 @@ from collections import defaultdict
 from collections.abc import Callable, Iterable
 from typing import Any
 
-from .models import market_of
+from .models import MARKET_LABELS, market_of
 
 WEIGHTS = {"L1": 1, "L2": 2, "L3": 3}
-MARKET_LABELS = {"US": "美股", "CRYPTO": "加密"}
 
 
 def episodes_from(signals: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:

@@ -8,9 +8,67 @@ LEVEL_RANK = {"L0": 0, "L1": 1, "L2": 2, "L3": 3}
 LEVEL_NAMES = {"L0": "记录", "L1": "异动", "L2": "显著", "L3": "剧烈"}
 
 
+# 大宗商品：Binance USDT-M 的 TradFi 永续合约（黄金、白银、原油等）。代码和加密现货同一个格式（XAUUSDT），
+# 只能靠名单区分：内置常见品种，配置里 [commodities] symbols 加载时会再登记进来。
+COMMODITY_SYMBOLS: set[str] = {
+    "XAUUSDT",  # 黄金
+    "XAGUSDT",  # 白银
+    "XPTUSDT",  # 铂金
+    "XPDUSDT",  # 钯金
+    "COPPERUSDT",  # 铜
+    "CLUSDT",  # WTI 原油
+    "BZUSDT",  # 布伦特原油
+}
+COMMODITY_NAMES = {
+    "XAU": "黄金",
+    "XAG": "白银",
+    "XPT": "铂金",
+    "XPD": "钯金",
+    "COPPER": "铜",
+    "CL": "WTI原油",
+    "BZ": "布伦特原油",
+}
+MARKET_LABELS = {"US": "美股", "CRYPTO": "加密", "CMDTY": "大宗商品"}
+MARKETS = ("US", "CRYPTO", "CMDTY")
+
+
+# /mute 大宗商品 之类：整个市场静音的写法
+MARKET_ALIASES = {
+    "美股": "US",
+    "US": "US",
+    "STOCKS": "US",
+    "加密": "CRYPTO",
+    "加密货币": "CRYPTO",
+    "CRYPTO": "CRYPTO",
+    "大宗": "CMDTY",
+    "大宗商品": "CMDTY",
+    "商品": "CMDTY",
+    "CMDTY": "CMDTY",
+    "COMMODITIES": "CMDTY",
+}
+
+
+def target_label(target: str) -> str:
+    """静音 / 类型开关目标的可读名字。"""
+    if target == "*":
+        return "全部"
+    if target.startswith("market:"):
+        return MARKET_LABELS.get(target[7:], target[7:])
+    if target.startswith("group:"):
+        return "分组 " + target[6:]
+    return display_name(target)
+
+
+def register_commodities(symbols: list[str]) -> None:
+    COMMODITY_SYMBOLS.update(s.upper() for s in symbols)
+
+
 def market_of(symbol: str) -> str:
-    """美股代码形如 NVDA.US，其余视为加密货币现货（BTCUSDT）。"""
-    return "US" if symbol.upper().endswith(".US") else "CRYPTO"
+    """美股代码形如 NVDA.US；大宗商品按名单（XAUUSDT 等 Binance 永续）；其余视为加密货币现货（BTCUSDT）。"""
+    s = symbol.upper()
+    if s.endswith(".US"):
+        return "US"
+    return "CMDTY" if s in COMMODITY_SYMBOLS else "CRYPTO"
 
 
 def display_name(symbol: str) -> str:

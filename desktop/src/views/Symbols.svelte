@@ -3,11 +3,13 @@
   import { MARKET_LABELS, displayName, fmtPct, fmtPrice } from "../lib/format";
 
   let group = $state("");
+  let market = $state("");
   let err = $state("");
 
   const rows = $derived(
     app.symbols
       .filter((s) => !group || s.groups.includes(group))
+      .filter((s) => !market || s.market === market)
       .map((s) => ({ ...s, ...(app.quotes[s.symbol] ?? {}) })),
   );
 
@@ -22,6 +24,12 @@
       err = (e as Error).message;
     }
   }
+
+  // 整个市场静音 / 取消（服务器 v4.3 起支持 market:US / market:CRYPTO / market:CMDTY）
+  const marketMuted = $derived(rows.length > 0 && rows.every((s) => s.muted));
+  function muteMarket(on: boolean) {
+    return mute(`market:${market}`, on);
+  }
 </script>
 
 <div class="row bar">
@@ -29,6 +37,14 @@
     <option value="">全部分组</option>
     {#each Object.keys(app.groups) as g}<option value={g}>{g}</option>{/each}
   </select>
+  <select bind:value={market}>
+    <option value="">全部市场</option>
+    {#each Object.entries(MARKET_LABELS) as [k, v]}<option value={k}>{v}</option>{/each}
+  </select>
+  {#if market && app.canWrite}
+    {#if marketMuted}<button class="small" onclick={() => muteMarket(false)}>取消{MARKET_LABELS[market]}静音</button>
+    {:else}<button class="small" onclick={() => muteMarket(true)}>静音全部{MARKET_LABELS[market]} 1 小时</button>{/if}
+  {/if}
   <button class="small" onclick={() => app.loadSymbols()}>刷新</button>
   {#if err}<span class="err small">{err}</span>{/if}
 </div>

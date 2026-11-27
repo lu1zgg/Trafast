@@ -117,7 +117,7 @@ def test_log_level_names():
     h.bars(S, t, [100.7, 100.7])
     d = [x for x in h.decisions if x.outcome == "pushed"][0]
     assert d.level == "L1" and d.k == 1 and math.isclose(d.d, math.log(1.007))
-    assert d.rule_version.startswith("v4.2-")
+    assert d.rule_version.startswith("v4.3-")
 
 
 def test_stock_synthetic_fill_and_late_real_bar_redetect():

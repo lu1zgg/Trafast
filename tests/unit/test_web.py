@@ -513,6 +513,7 @@ def test_same_origin_post_and_null_origin_accepted(env):
 def _trend_form(csrf: str, **over) -> dict:
     form = {
         "csrf": csrf, "enabled": "on", "sym_NVDA.US": "on", "sym_AAPL.US": "on", "sym_BTCUSDT": "on",
+        **{f"sym_{s}": "on" for s in ("XAUUSDT", "XAGUSDT", "BZUSDT", "CLUSDT")},
         "accept_bars": "4", "min_4h_score": "1", "cooldown_h": "4", "hard_risk_atr4h": "2.5",
         "max_risk_atr4h": "1.8", "max_ext_atr1h": "2.5", "climax_mult": "2.5",
         "sr_tol_atr": "0.4", "sr_half_life_d": "15", "sr_vp_days": "10", "sr_show": "2",

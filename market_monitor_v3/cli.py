@@ -40,6 +40,14 @@ def cmd_run(args: argparse.Namespace) -> int:
     return run_service(args.config)
 
 
+def cmd_migrate_config(args: argparse.Namespace) -> int:
+    from .migrate import migrate_file
+
+    notes = migrate_file(args.config)
+    print("配置迁移：" + ("；".join(notes) if notes else "无需改动"))
+    return 0
+
+
 def cmd_check_config(args: argparse.Namespace) -> int:
     cfg = _cfg(args)
     p = Params(cfg)
@@ -47,6 +55,7 @@ def cmd_check_config(args: argparse.Namespace) -> int:
     print(f"数据库：{cfg.db_path}")
     print(f"美股：{'启用' if cfg.stocks.enabled else '关闭'} {', '.join(cfg.stocks.symbols)}（夜盘 {'开' if cfg.stocks.overnight else '关'}）")
     print(f"加密：{'启用' if cfg.crypto.enabled else '关闭'} {', '.join(cfg.crypto.symbols)}")
+    print(f"大宗商品：{'启用' if cfg.commodities.enabled else '关闭'} {', '.join(cfg.commodities.symbols)}（Binance 合约，只在开市时检测）")
     print("时段          地板 1/5/15 分钟          Z    直通 1/5/15 分钟")
     for a, b, c, d in p.table():
         print(f"{a:<6}  {b:<24}  {c:<3}  {d}")
@@ -150,7 +159,7 @@ def cmd_replay(args: argparse.Namespace) -> int:
 
 # ---- 补数 ----
 def cmd_backfill_crypto(args: argparse.Namespace) -> int:
-    from .feeds.binance_spot import BinanceSpotFeed
+    from .feeds.binance_spot import BinanceFuturesFeed, BinanceSpotFeed
     from .store import Store
 
     cfg = _cfg(args)
@@ -158,16 +167,23 @@ def cmd_backfill_crypto(args: argparse.Namespace) -> int:
     async def main() -> int:
         store = Store(cfg.db_path)
         await store.open()
-        feed = BinanceSpotFeed(cfg.crypto, lambda b: None, lambda n, t: None)
+        feeds = []
+        if cfg.crypto.enabled:
+            feeds.append(BinanceSpotFeed(cfg.crypto, lambda b: None, lambda n, t: None))
+        if cfg.commodities.enabled:
+            feeds.append(BinanceFuturesFeed(cfg.commodities, lambda b: None, lambda n, t: None))
+        n = 0
         try:
-            n = await feed.warmup(
-                lambda bars: store.call(Store.insert_bars, bars),
-                lambda sym, since: store.call(Store.first_bar_ts, sym, since),
-                lambda sym: store.call(Store.last_bar_ts, sym),
-                args.days,
-            )
+            for feed in feeds:
+                n += await feed.warmup(
+                    lambda bars: store.call(Store.insert_bars, bars),
+                    lambda sym, since: store.call(Store.first_bar_ts, sym, since),
+                    lambda sym: store.call(Store.last_bar_ts, sym),
+                    args.days,
+                )
         finally:
-            await feed.http.aclose()
+            for feed in feeds:
+                await feed.http.aclose()
             await store.close()
         print(f"写入 {n} 根 K 线到 {cfg.db_path}")
         return 0
@@ -194,11 +210,15 @@ def cmd_trend_backtest(args: argparse.Namespace) -> int:
         await store.open()
         try:
             if args.fetch:
-                from .feeds.binance_spot import BinanceSpotFeed
+                from .feeds.binance_spot import BinanceFuturesFeed, BinanceSpotFeed
 
-                feed = BinanceSpotFeed(cfg.crypto, lambda b: None, lambda n, t: None)
+                feeds = {
+                    "CRYPTO": BinanceSpotFeed(cfg.crypto, lambda b: None, lambda n, t: None),
+                    "CMDTY": BinanceFuturesFeed(cfg.commodities, lambda b: None, lambda n, t: None),
+                }
                 try:
-                    for sym in [s for s in syms if market_of(s) == "CRYPTO"]:
+                    for sym in [s for s in syms if market_of(s) in feeds]:
+                        feed = feeds[market_of(sym)]
                         rows = await feed.fetch_rows(sym, "15m", since, now - now % 900)
                         items = [
                             (sym, Candle(int(r[0]) // 1000, int(r[0]) // 1000 + 900, *(float(r[k]) for k in (1, 2, 3, 4, 7))))
@@ -207,7 +227,8 @@ def cmd_trend_backtest(args: argparse.Namespace) -> int:
                         await store.call(Store.insert_trend_bars, items)
                         print(f"{display_name(sym)}：从 Binance 补 {len(items)} 根 15m")
                 finally:
-                    await feed.http.aclose()
+                    for feed in feeds.values():
+                        await feed.http.aclose()
             data = {s: [Candle.from_row(r) for r in await store.call(Store.load_trend_bars, s, since)] for s in syms}
         finally:
             await store.close()
@@ -634,6 +655,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     add("run", cmd_run, "运行服务")
     add("check-config", cmd_check_config, "校验配置并打印门槛表")
+    add("migrate-config", cmd_migrate_config, "升级时补齐旧配置里新版本需要的段落（upgrade.sh 自动调用）")
     p = add("replay", cmd_replay, "用历史 K 线回放，统计会发多少条消息")
     p.add_argument("--db")
     p.add_argument("--csv", nargs="*")
@@ -644,7 +666,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--show", action="store_true", help="打印每条消息")
     p.add_argument("--json", help="把消息清单写成 JSON（golden 测试用）")
     p.add_argument("-v", "--verbose", action="store_true")
-    p = add("backfill-crypto", cmd_backfill_crypto, "从 Binance REST 拉加密货币历史 K 线")
+    p = add("backfill-crypto", cmd_backfill_crypto, "从 Binance REST 拉加密货币和大宗商品历史 K 线")
     p.add_argument("--days", type=int, default=14)
     p = add("trend-backtest", cmd_trend_backtest, "用 15m 历史回测趋势规则，并和随机入场对照")
     p.add_argument("symbols", nargs="*", help="不填 = 全部开启趋势监控的标的")

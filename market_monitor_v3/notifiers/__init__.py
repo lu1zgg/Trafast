@@ -58,7 +58,7 @@ class Route:
 
     alerts: bool = True
     min_level: str = "L1"
-    markets: tuple[str, ...] = ("US", "CRYPTO")
+    markets: tuple[str, ...] = ("US", "CRYPTO", "CMDTY")
     tradingview: bool = True
     ops: bool = True
     reports: bool = True

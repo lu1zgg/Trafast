@@ -12,7 +12,7 @@ import time
 from collections.abc import Callable
 from typing import Any, Protocol
 
-from .models import OutMsg
+from .models import MARKET_ALIASES, OutMsg, target_label
 from .notifiers.telegram import ChatRef
 from .store import Store
 from .telegram import TelegramClient
@@ -21,7 +21,7 @@ log = logging.getLogger(__name__)
 
 HELP = """<b>可用命令</b>
 /status 运行状态、数据源、进行中的异动
-/mute 代码 [时长]  静音一个标的，例如 /mute MU 2h（默认 1h，最长 7d；代码写 all 表示全部）
+/mute 代码 [时长]  静音一个标的，例如 /mute MU 2h、/mute XAU 30m（默认 1h，最长 7d；代码写 all 表示全部，写 美股 / 加密 / 大宗商品 表示整个市场）
 /unmute 代码|all  取消静音
 /mutes 当前静音列表
 /params 当前触发门槛
@@ -136,6 +136,8 @@ async def run_command(
         target_raw = args[0]
         if target_raw.lower() in ("all", "全部", "*"):
             target: str | None = "*"
+        elif target_raw.upper() in MARKET_ALIASES:
+            target = "market:" + MARKET_ALIASES[target_raw.upper()]
         else:
             target = hooks.resolve_symbol(target_raw)
             if target is None:
@@ -146,12 +148,12 @@ async def run_command(
                 return "时长格式不对，例如 30m、2h、1d。"
             until = clock() + dur
             await hooks.mute(target, until, who)
-            name = "全部标的" if target == "*" else target
+            name = "全部标的" if target == "*" else target_label(target)
             return f"已静音 {name}，{_fmt_dur(dur)}。静音期间的异动只记录不推送，运维消息照常。"
         n = await hooks.unmute(None if target == "*" else target)
         if target == "*":
             return "已取消全部静音。" if n else "当前没有静音。"
-        return "已取消静音。" if n else "这个标的没有在静音。"
+        return "已取消静音。" if n else f"{target_label(target)} 没有在静音。"
     return None  # 未知命令不回应，避免和群里其他 bot 冲突
 
 

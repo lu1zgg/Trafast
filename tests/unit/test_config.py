@@ -16,7 +16,7 @@ def test_sensitive_preset_has_louis_decisions():
     assert p.sessions["CWD"].bypass == pytest.approx((0.015, 0.025, 0.035))
     assert p.floor("ETHUSDT", "CWD", 1) == pytest.approx(0.006)
     assert p.floor("SOLUSDT", "CWD", 15) == pytest.approx(0.021)
-    assert p.rule_version.startswith("v4.2-灵敏-")
+    assert p.rule_version.startswith("v4.3-灵敏-")
 
 
 def test_rule_version_changes_with_params():

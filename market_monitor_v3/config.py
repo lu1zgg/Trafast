@@ -19,6 +19,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 WINDOWS: tuple[int, int, int] = (1, 5, 15)
 STOCK_SESSIONS = ("PRE", "REG", "POST", "ON")
 CRYPTO_SESSIONS = ("CWD", "CWE")  # 加密货币：UTC 工作日 / 周末
+COMMODITY_SESSIONS = ("CMO",)  # 大宗商品：只在标的市场开市时检测；休市 CMC 不检测
+ALL_SESSIONS = STOCK_SESSIONS + CRYPTO_SESSIONS + COMMODITY_SESSIONS
 SESSION_LABELS = {
     "PRE": "盘前",
     "REG": "盘中",
@@ -26,9 +28,11 @@ SESSION_LABELS = {
     "ON": "夜盘",
     "CWD": "工作日",
     "CWE": "周末",
+    "CMO": "开市",
+    "CMC": "休市",
     "CLOSED": "休市",
 }
-RULE_MAJOR = "v4.2"
+RULE_MAJOR = "v4.3"
 
 Triple = tuple[float, float, float]
 
@@ -40,6 +44,10 @@ STOCK_FLOORS_PCT: dict[str, Triple] = {
     "ON": (0.8, 1.5, 2.2),
 }
 CRYPTO_FLOORS_PCT: Triple = (0.5, 1.0, 1.5)
+# 大宗商品按黄金定基准，白银、原油用标的系数放大（见 DEFAULT_COMMODITY_MULT）。
+# 2026-11-27 用 Binance 60 天 1 分钟 K 线核对：开市时段只看地板 + 下一根确认，每个品种约 0.8 次/交易日，
+# 30 分钟内回吐过半的约 20%（0.25/0.5/0.8 时约 1.2 次、回吐 26%–42%）。
+COMMODITY_FLOORS_PCT: Triple = (0.3, 0.6, 1.0)
 
 # 三档预设。灵敏档已包含 louis 2026-11-23 的决定：盘前、盘后、夜盘 15 分钟直通线 2.5%。
 PRESETS: dict[str, dict] = {
@@ -54,6 +62,8 @@ PRESETS: dict[str, dict] = {
         },
         "crypto_z": {"CWD": 5, "CWE": 6},
         "crypto_bypass": (1.5, 2.5, 3.5),
+        "commodity_z": 5,
+        "commodity_bypass": (1.0, 1.8, 2.5),
     },
     "balanced": {
         "label": "均衡",
@@ -61,6 +71,8 @@ PRESETS: dict[str, dict] = {
         "stock_bypass": {s: (2.0, 2.5, 3.0) for s in STOCK_SESSIONS},
         "crypto_z": {"CWD": 6, "CWE": 7},
         "crypto_bypass": (1.5, 2.5, 3.5),
+        "commodity_z": 6,
+        "commodity_bypass": (1.2, 2.0, 2.8),
     },
     "conservative": {
         "label": "克制",
@@ -68,6 +80,8 @@ PRESETS: dict[str, dict] = {
         "stock_bypass": {s: (2.0, 3.0, 4.0) for s in STOCK_SESSIONS},
         "crypto_z": {"CWD": 7, "CWE": 8},
         "crypto_bypass": (1.5, 2.5, 3.5),
+        "commodity_z": 7,
+        "commodity_bypass": (1.5, 2.5, 3.0),
     },
 }
 
@@ -84,6 +98,9 @@ DEFAULT_STOCKS = [
     "SPCX.US",
 ]
 DEFAULT_CRYPTO = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+DEFAULT_COMMODITIES = ["XAUUSDT", "XAGUSDT", "BZUSDT", "CLUSDT"]
+# 按 60 天 5 分钟收益 99 分位相对黄金的倍数取整
+DEFAULT_COMMODITY_MULT = {"XAGUSDT": 2.0, "BZUSDT": 1.8, "CLUSDT": 1.8}
 
 _HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
@@ -111,7 +128,7 @@ class RouteCfg(_M):
 
     alerts: bool = True  # 异动告警
     min_level: Literal["L1", "L2", "L3"] = "L1"  # 只收这个级别及以上
-    markets: list[Literal["US", "CRYPTO"]] = Field(default_factory=lambda: ["US", "CRYPTO"])
+    markets: list[Literal["US", "CRYPTO", "CMDTY"]] = Field(default_factory=lambda: ["US", "CRYPTO", "CMDTY"])
     tradingview: bool = True  # TradingView 转发的告警
     ops: bool = True  # 运维消息
     reports: bool = True  # 日报
@@ -225,17 +242,17 @@ class RulesCfg(_M):
     @field_validator("fast_confirm_sessions")
     @classmethod
     def _known_confirm_sessions(cls, v: list[str]) -> list[str]:
-        bad = [k for k in v if k not in STOCK_SESSIONS + CRYPTO_SESSIONS]
+        bad = [k for k in v if k not in ALL_SESSIONS]
         if bad:
-            raise ValueError(f"未知时段 {bad}，可用 {STOCK_SESSIONS + CRYPTO_SESSIONS}")
+            raise ValueError(f"未知时段 {bad}，可用 {ALL_SESSIONS}")
         return v
 
     @field_validator("overrides")
     @classmethod
     def _known_sessions(cls, v: dict[str, SessionOverride]) -> dict[str, SessionOverride]:
-        bad = [k for k in v if k not in STOCK_SESSIONS + CRYPTO_SESSIONS]
+        bad = [k for k in v if k not in ALL_SESSIONS]
         if bad:
-            raise ValueError(f"未知时段 {bad}，可用 {STOCK_SESSIONS + CRYPTO_SESSIONS}")
+            raise ValueError(f"未知时段 {bad}，可用 {ALL_SESSIONS}")
         return v
 
 
@@ -309,6 +326,34 @@ class CryptoCfg(_M):
         out = [s.strip().upper() for s in v]
         if any(s.endswith(".US") for s in out):
             raise ValueError("加密货币代码不能以 .US 结尾")
+        return out
+
+
+class CommodityCfg(_M):
+    """大宗商品：Binance USDT-M 的 TradFi 永续合约（XAUUSDT 黄金、XAGUSDT 白银、BZUSDT 布伦特、CLUSDT WTI 等）。
+
+    合约 7×24 交易，但只在标的市场开市时（美东周日 18:00 – 周五 17:00，每天 17:00–18:00 除外）检测异动。
+    """
+
+    enabled: bool = True  # 升级后旧配置里没有 [commodities] 也直接开始监控
+    symbols: list[str] = Field(default_factory=lambda: list(DEFAULT_COMMODITIES))
+    multipliers: dict[str, float] = Field(default_factory=lambda: dict(DEFAULT_COMMODITY_MULT))
+    ws_url: str = "wss://fstream.binance.com/market"  # 合约行情的 K 线要走 /market 路由（旧的 /stream 已下线）
+    rest_url: str = "https://fapi.binance.com"
+    rotate_hours: float = Field(23, gt=0, le=23.9)
+    grace_s: float = Field(5, ge=1, le=30)
+    baseline_days: int = Field(20, ge=3, le=60)  # 基线按最近多少天的开市时段算
+    min_days: int = Field(3, ge=1)
+
+    @field_validator("symbols")
+    @classmethod
+    def _cm_symbols(cls, v: list[str]) -> list[str]:
+        out = [s.strip().upper() for s in v]
+        bad = [s for s in out if s.endswith(".US") or not s.endswith("USDT")]
+        if bad:
+            raise ValueError(f"大宗商品写 Binance 合约代码，例如 XAUUSDT：{bad}")
+        if len(set(out)) != len(out):
+            raise ValueError("大宗商品代码有重复")
         return out
 
 
@@ -413,6 +458,7 @@ DEFAULT_GROUPS: dict[str, list[str]] = {
     "平台与汽车": ["GOOGL", "META", "TSLA"],
     "能源与太空": ["BE", "SPCX"],
     "加密": ["BTC", "ETH", "SOL"],
+    "大宗商品": ["XAU", "XAG", "BZ", "CL"],
 }
 
 
@@ -459,6 +505,7 @@ class AppConfig(_M):
     merge: MergeCfg = Field(default_factory=MergeCfg)
     stocks: StocksCfg = Field(default_factory=StocksCfg)
     crypto: CryptoCfg = Field(default_factory=CryptoCfg)
+    commodities: CommodityCfg = Field(default_factory=CommodityCfg)
     health: HealthCfg = Field(default_factory=HealthCfg)
     calendar: CalendarCfg = Field(default_factory=CalendarCfg)
     storage: StorageCfg = Field(default_factory=StorageCfg)
@@ -477,8 +524,20 @@ class AppConfig(_M):
             raise ValueError("Telegram 和 Discord 至少启用一个推送渠道")
         if self.weekend_perp.enabled:
             raise ValueError("周末合约模块在本版本未实现，请保持 weekend_perp.enabled = false")
-        if not (self.stocks.enabled or self.crypto.enabled):
-            raise ValueError("美股和加密货币至少启用一个")
+        if not (self.stocks.enabled or self.crypto.enabled or self.commodities.enabled):
+            raise ValueError("美股、加密货币、大宗商品至少启用一个")
+        from .models import register_commodities
+
+        register_commodities(self.commodities.symbols)
+        both = set(self.crypto.symbols) & set(self.commodities.symbols)
+        if both:
+            raise ValueError(f"{sorted(both)} 同时写在了 [crypto] 和 [commodities]，只能留一个")
+        if self.crypto.enabled:
+            from .models import COMMODITY_SYMBOLS
+
+            wrong = [s for s in self.crypto.symbols if s in COMMODITY_SYMBOLS]
+            if wrong:
+                raise ValueError(f"{wrong} 是大宗商品合约，请写在 [commodities] symbols 里")
         return self
 
     @property
@@ -500,6 +559,8 @@ class AppConfig(_M):
             out += self.stocks.symbols
         if self.crypto.enabled:
             out += self.crypto.symbols
+        if self.commodities.enabled:
+            out += self.commodities.symbols
         return out
 
 
@@ -532,9 +593,14 @@ class Params:
             self.sessions[s] = self._resolve(
                 CRYPTO_FLOORS_PCT, preset["crypto_z"][s], preset["crypto_bypass"], cfg.rules.overrides.get(s)
             )
+        for s in COMMODITY_SESSIONS:
+            self.sessions[s] = self._resolve(
+                COMMODITY_FLOORS_PCT, preset["commodity_z"], preset["commodity_bypass"], cfg.rules.overrides.get(s)
+            )
         self.multipliers: dict[str, float] = {}
         self.multipliers.update({k.upper(): v for k, v in cfg.stocks.multipliers.items()})
         self.multipliers.update({k.upper(): v for k, v in cfg.crypto.multipliers.items()})
+        self.multipliers.update({k.upper(): v for k, v in cfg.commodities.multipliers.items()})
         self.rules = cfg.rules
         self.episode = cfg.episode
         self.merge = cfg.merge

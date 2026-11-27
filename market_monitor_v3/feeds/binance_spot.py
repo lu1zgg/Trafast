@@ -15,16 +15,16 @@ from typing import Any
 
 import httpx
 
-from ..config import CryptoCfg
+from ..config import CommodityCfg, CryptoCfg
 from ..models import Bar
-from ..sessions import crypto_session
+from ..sessions import commodity_session, crypto_session
 
 log = logging.getLogger(__name__)
 
 MAX_BACKFILL_S = 2 * 86400
 
 
-def parse_kline_event(msg: dict[str, Any]) -> Bar | None:
+def parse_kline_event(msg: dict[str, Any], session_fn: Callable[[float], str] = crypto_session) -> Bar | None:
     data = msg.get("data", msg)
     if not isinstance(data, dict) or data.get("e") != "kline":
         return None
@@ -41,12 +41,12 @@ def parse_kline_event(msg: dict[str, Any]) -> Bar | None:
         c=float(k["c"]),
         volume=float(k.get("v", 0.0)),
         turnover=float(k.get("q", 0.0)),
-        session=crypto_session(ts),
+        session=session_fn(ts),
         source="binance",
     )
 
 
-def parse_rest_row(symbol: str, row: list[Any]) -> Bar:
+def parse_rest_row(symbol: str, row: list[Any], session_fn: Callable[[float], str] = crypto_session) -> Bar:
     ts = int(row[0]) // 1000
     return Bar(
         symbol=symbol,
@@ -57,7 +57,7 @@ def parse_rest_row(symbol: str, row: list[Any]) -> Bar:
         c=float(row[4]),
         volume=float(row[5]),
         turnover=float(row[7]),
-        session=crypto_session(ts),
+        session=session_fn(ts),
         source="binance-rest",
     )
 
@@ -65,10 +65,17 @@ def parse_rest_row(symbol: str, row: list[Any]) -> Bar:
 class BinanceSpotFeed:
     name = "binance"
     market = "CRYPTO"
+    label = "Binance"
+    klines_path = "/api/v3/klines"
+    time_path = "/api/v3/time"
+
+    @staticmethod
+    def session_fn(ts: float) -> str:
+        return crypto_session(ts)
 
     def __init__(
         self,
-        cfg: CryptoCfg,
+        cfg: CryptoCfg | CommodityCfg,
         emit: Callable[[Bar], None],
         seen: Callable[[str, float], None],
         stale_s: float = 30.0,
@@ -112,16 +119,16 @@ class BinanceSpotFeed:
         try:
             for b in await self.fetch_klines(symbol, start, end, pause_s=0):
                 self.emit(b)
-            log.info("Binance 补缺口 %s：%d 分钟", symbol, (end - start) // 60)
+            log.info("%s 补缺口 %s：%d 分钟", self.label, symbol, (end - start) // 60)
         except Exception as e:  # noqa: BLE001
-            log.warning("Binance 补缺口失败 %s：%s", symbol, type(e).__name__)
+            log.warning("%s 补缺口失败 %s：%s", self.label, symbol, type(e).__name__)
 
     # ---- REST ----
     async def fetch_klines(self, symbol: str, start_ts: int, end_ts: int, pause_s: float = 0.2) -> list[Bar]:
         """取 [start_ts, end_ts) 内已收盘的 K 线。"""
         out: list[Bar] = []
         cur = start_ts
-        url = f"{self.cfg.rest_url.rstrip('/')}/api/v3/klines"
+        url = f"{self.cfg.rest_url.rstrip('/')}{self.klines_path}"
         while cur < end_ts:
             params = {
                 "symbol": symbol,
@@ -133,7 +140,7 @@ class BinanceSpotFeed:
             r = await self.http.get(url, params=params)
             if r.status_code in (418, 429):
                 wait = float(r.headers.get("Retry-After", "30"))
-                log.warning("Binance REST 限频，等待 %.0f 秒", wait)
+                log.warning("%s REST 限频，等待 %.0f 秒", self.label, wait)
                 await asyncio.sleep(wait)
                 continue
             r.raise_for_status()
@@ -143,7 +150,7 @@ class BinanceSpotFeed:
             now = self.clock()
             for row in rows:
                 if int(row[6]) / 1000 <= now:  # 只要已收盘的
-                    out.append(parse_rest_row(symbol, row))
+                    out.append(parse_rest_row(symbol, row, self.session_fn))
             nxt = int(rows[-1][0]) // 1000 + 60
             if nxt <= cur:
                 break
@@ -157,13 +164,13 @@ class BinanceSpotFeed:
         step = {"1m": 60, "15m": 900, "1h": 3600, "4h": 14400}[interval]
         out: list[list[Any]] = []
         cur = start_ts
-        url = f"{self.cfg.rest_url.rstrip('/')}/api/v3/klines"
+        url = f"{self.cfg.rest_url.rstrip('/')}{self.klines_path}"
         while cur < end_ts:
             params = {"symbol": symbol, "interval": interval, "startTime": cur * 1000, "endTime": end_ts * 1000 - 1, "limit": 1000}
             r = await self.http.get(url, params=params)
             if r.status_code in (418, 429):
                 wait = float(r.headers.get("Retry-After", "30"))
-                log.warning("Binance REST 限频，等待 %.0f 秒", wait)
+                log.warning("%s REST 限频，等待 %.0f 秒", self.label, wait)
                 await asyncio.sleep(wait)
                 continue
             r.raise_for_status()
@@ -195,9 +202,9 @@ class BinanceSpotFeed:
                 got = await self.fetch_klines(sym, start, end)
                 bars.extend(got)
                 if got:
-                    log.info("Binance 补数 %s：%d 根", sym, len(got))
+                    log.info("%s 补数 %s：%d 根", self.label, sym, len(got))
             except Exception as e:  # noqa: BLE001
-                log.warning("Binance 补数失败 %s：%s", sym, type(e).__name__)
+                log.warning("%s 补数失败 %s：%s", self.label, sym, type(e).__name__)
         return bars
 
     async def warmup(self, insert: Callable[[list[Bar]], Any], first_ts: Callable[[str, int], Any], last_ts: Callable[[str], Any], days: int) -> int:
@@ -221,14 +228,14 @@ class BinanceSpotFeed:
                 if bars:
                     await insert(bars)
                     total += len(bars)
-                log.info("Binance 预热 %s：%d 根", sym, len(bars))
+                log.info("%s 预热 %s：%d 根", self.label, sym, len(bars))
             lt = await last_ts(sym)
             if lt is not None:
                 self.last_ts[sym] = lt
         return total
 
     async def server_time(self) -> float:
-        r = await self.http.get(f"{self.cfg.rest_url.rstrip('/')}/api/v3/time")
+        r = await self.http.get(f"{self.cfg.rest_url.rstrip('/')}{self.time_path}")
         r.raise_for_status()
         return r.json()["serverTime"] / 1000.0
 
@@ -257,22 +264,22 @@ class BinanceSpotFeed:
                     self.connected = True
                     backoff = 1.0
                     started = self.clock()
-                    log.info("Binance 已连接（%d 个币）", len(self.symbols))
+                    log.info("%s 已连接（%d 个标的）", self.label, len(self.symbols))
                     backfill = asyncio.create_task(self.backfill_since_last())
                     while not stop.is_set():
                         if self.clock() - started > rotate_s:
-                            log.info("Binance 连接满 %.0f 小时，主动重连", self.cfg.rotate_hours)
+                            log.info("%s 连接满 %.0f 小时，主动重连", self.label, self.cfg.rotate_hours)
                             break
                         try:
                             raw = await asyncio.wait_for(ws.recv(), timeout=self.stale_s)
                         except TimeoutError:
-                            log.warning("Binance %.0f 秒没有数据，重连", self.stale_s)
+                            log.warning("%s %.0f 秒没有数据，重连", self.label, self.stale_s)
                             break
                         self.seen(self.name, self.clock())
                         try:
-                            bar = parse_kline_event(json.loads(raw))
+                            bar = parse_kline_event(json.loads(raw), self.session_fn)
                         except (ValueError, KeyError, TypeError):
-                            log.warning("Binance 消息解析失败")
+                            log.warning("%s 消息解析失败", self.label)
                             continue
                         if backfill is not None:
                             if bar is not None:
@@ -288,7 +295,7 @@ class BinanceSpotFeed:
                     backfill.cancel()
                 raise
             except Exception as e:  # noqa: BLE001
-                log.warning("Binance 连接出错：%s %s", type(e).__name__, str(e)[:200])
+                log.warning("%s 连接出错：%s %s", self.label, type(e).__name__, str(e)[:200])
             # 断线时补数还没放出：缓存的实时 K 线不能丢
             if backfill is not None or buffered:
                 self._flush(backfill, buffered)
@@ -301,3 +308,20 @@ class BinanceSpotFeed:
             except TimeoutError:
                 pass
             backoff = min(60.0, backoff * 2)
+
+
+class BinanceFuturesFeed(BinanceSpotFeed):
+    """Binance USDT-M 永续合约 1 分钟 K 线（大宗商品：XAUUSDT、XAGUSDT、BZUSDT、CLUSDT 等）。
+
+    和现货同一套补数 / 重连逻辑，只是接口路径不同；WebSocket 地址要带 /market 路由。
+    """
+
+    name = "binance-futures"
+    market = "CMDTY"
+    label = "Binance 合约"
+    klines_path = "/fapi/v1/klines"
+    time_path = "/fapi/v1/time"
+
+    @staticmethod
+    def session_fn(ts: float) -> str:
+        return commodity_session(ts)

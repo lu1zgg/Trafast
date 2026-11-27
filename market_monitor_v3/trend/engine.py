@@ -15,6 +15,7 @@ from typing import Any
 
 from ..models import Bar, OutMsg, display_name, market_of
 from ..render import feedback_buttons
+from ..sessions import commodity_session
 from .breakout import BreakoutWatch, LevelBreak, break_text
 from .buckets import Bucketer, UsRegularBucketer, UtcBucketer
 from .levels import Levels
@@ -82,6 +83,7 @@ class TrendEngine:
         self.level_breaks = True
 
     def bucketer(self, symbol: str) -> Bucketer:
+        # 大宗商品和加密一样按 UTC 分 15m / 1h / 4h（Binance 合约 7×24 有 K 线）
         return self._us if market_of(symbol) == "US" else self._utc
 
     def set_params(self, params: TrendParams, show: int | None = None) -> None:
@@ -222,6 +224,8 @@ class TrendEngine:
                 why = "stale"
             elif self.is_muted(sym, now):
                 why = "muted"
+            elif _cm_closed(sym, ev.t):
+                why = "closed"  # 大宗商品休市（周末、每日 17:00–18:00 美东）：照样跟踪，不推
             if why:
                 log.info("趋势形成未推送 %s %s：%s %s", display_name(sym), "涨" if ev.d > 0 else "跌", why, ev.quiet)
                 return
@@ -257,7 +261,7 @@ class TrendEngine:
 
     def _level_break(self, br: LevelBreak, now: float) -> None:
         self._eff.events.append((br.t, br.symbol, "level", br.d, br.price, br.to_json()))
-        if now - br.t > STALE_S or self.is_muted(br.symbol, now):
+        if now - br.t > STALE_S or self.is_muted(br.symbol, now) or _cm_closed(br.symbol, br.t):
             return
         key = f"trend-level:{br.symbol}:{br.t}:{br.d}"
         self.out(
@@ -316,3 +320,7 @@ class TrendEngine:
             s["seeded"] = m.symbol in self.seeded
             out.append(s)
         return out
+
+
+def _cm_closed(symbol: str, t: float) -> bool:
+    return market_of(symbol) == "CMDTY" and commodity_session(t) == "CMC"
