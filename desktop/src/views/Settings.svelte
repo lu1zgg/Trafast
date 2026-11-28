@@ -1,8 +1,9 @@
 <script lang="ts">
   import { app } from "../lib/state.svelte";
   import { ApiClient } from "../lib/api";
-  import { ConfigError, looksLikeKey, normalizeServer, type Level } from "../lib/config";
-  import { deleteKey, getKey, setKey } from "../lib/secrets";
+  import { ConfigError, looksLikeKey, normalizeServer, type Level, type TickerSpeed } from "../lib/config";
+  import { deleteKey, getKey, inTauri, setKey } from "../lib/secrets";
+  import { invoke } from "@tauri-apps/api/core";
   import { ensurePermission, notify } from "../lib/notify";
   import type { Ping } from "../lib/types";
   import { displayName } from "../lib/format";
@@ -87,6 +88,10 @@
     app.saveSettings({ ...app.settings, notify: { ...app.settings.notify, [k]: v } });
   }
 
+  function setTicker<K extends keyof typeof app.settings.ticker>(k: K, v: (typeof app.settings.ticker)[K]) {
+    app.saveSettings({ ...app.settings, ticker: { ...app.settings.ticker, [k]: v } });
+  }
+
   function toggleTickerSym(sym: string, on: boolean) {
     const cur = new Set(app.settings.ticker.symbols);
     if (on) cur.add(sym);
@@ -128,32 +133,52 @@
 
   <div class="card">
     <h2>系统通知</h2>
-    <label class="row"><input type="checkbox" checked={app.settings.notify.enabled} onchange={(e) => setNotify("enabled", e.currentTarget.checked)} /> 新异动弹系统通知</label>
-    <label class="row"><input type="checkbox" checked={app.settings.notify.upgrades} onchange={(e) => setNotify("upgrades", e.currentTarget.checked)} /> 升级（L1 → L2 → L3）也通知</label>
-    <label class="row"><input type="checkbox" checked={app.settings.notify.sound} onchange={(e) => setNotify("sound", e.currentTarget.checked)} /> 声音</label>
-    <div class="row" style="margin-top: 8px">
-      <span>最低级别</span>
-      <select value={app.settings.notify.minLevel} onchange={(e) => setNotify("minLevel", e.currentTarget.value as Level)}>
-        <option value="L1">L1 及以上（全部）</option>
-        <option value="L2">L2 及以上</option>
-        <option value="L3">只要 L3</option>
-      </select>
-      <button onclick={testNotify}>发一条测试通知</button>
+    <div class="opts">
+      <label class="opt"><span>新异动弹系统通知</span><input type="checkbox" class="switch" checked={app.settings.notify.enabled} onchange={(e) => setNotify("enabled", e.currentTarget.checked)} /></label>
+      <label class="opt"><span>升级（L1 → L2 → L3）也通知</span><input type="checkbox" class="switch" checked={app.settings.notify.upgrades} onchange={(e) => setNotify("upgrades", e.currentTarget.checked)} /></label>
+      <label class="opt"><span>声音</span><input type="checkbox" class="switch" checked={app.settings.notify.sound} onchange={(e) => setNotify("sound", e.currentTarget.checked)} /></label>
+      <div class="opt">
+        <span>最低级别</span>
+        <select value={app.settings.notify.minLevel} onchange={(e) => setNotify("minLevel", e.currentTarget.value as Level)}>
+          <option value="L1">L1 及以上（全部）</option>
+          <option value="L2">L2 及以上</option>
+          <option value="L3">只要 L3</option>
+        </select>
+      </div>
     </div>
+    <div class="row" style="margin-top: 10px"><button class="small" onclick={testNotify}>发一条测试通知</button></div>
     <p class="muted small">关掉主窗口后程序留在菜单栏 / 系统托盘里，照样弹通知；要彻底退出请用托盘菜单的「退出」。</p>
   </div>
 
   <div class="card">
-    <h2>浮动行情条</h2>
-    <p class="muted small">勾选要在行情条上显示的标的；都不勾就显示全部。行情条可以拖动，托盘菜单里可以打开或关掉。</p>
+    <h2>滚动行情条</h2>
+    <p class="muted small">主窗口顶部正中一直有一条滚动行情（鼠标放上去暂停，点标的打开详情）。也可以在屏幕顶部正中再放一条，关掉主窗口也能看。</p>
+    <div class="opts">
+      <div class="opt">
+        <span>滚动速度</span>
+        <div class="seg" role="group" aria-label="滚动速度">
+          {#each [["slow", "慢"], ["normal", "中"], ["fast", "快"]] as [v, l]}
+            <button class:sel={app.settings.ticker.speed === v} onclick={() => setTicker("speed", v as TickerSpeed)}>{l}</button>
+          {/each}
+        </div>
+      </div>
+      <label class="opt"><span>插播最近 1 小时的异动快讯</span><input type="checkbox" class="switch" checked={app.settings.ticker.news} onchange={(e) => setTicker("news", e.currentTarget.checked)} /></label>
+      {#if inTauri()}
+        <div class="opt">
+          <span>屏幕顶部行情条</span>
+          <button class="small" onclick={() => invoke("toggle_ticker")}>显示 / 隐藏</button>
+        </div>
+        <label class="opt"><span>屏幕顶部行情条总在最前面</span><input type="checkbox" class="switch" checked={app.settings.ticker.onTop} onchange={(e) => setTicker("onTop", e.currentTarget.checked)} /></label>
+      {/if}
+    </div>
+    <p class="muted small">显示哪些标的：勾选要显示的；都不勾就显示全部。</p>
     <div class="syms">
       {#each app.symbols as s (s.symbol)}
-        <label><input type="checkbox" checked={app.settings.ticker.symbols.includes(s.symbol)} onchange={(e) => toggleTickerSym(s.symbol, e.currentTarget.checked)} /> {displayName(s.symbol)}</label>
+        <label class="sym" class:on={app.settings.ticker.symbols.includes(s.symbol)}><input type="checkbox" checked={app.settings.ticker.symbols.includes(s.symbol)} onchange={(e) => toggleTickerSym(s.symbol, e.currentTarget.checked)} /> {displayName(s.symbol)}</label>
       {:else}
         <span class="muted">连上服务器后这里会列出标的。</span>
       {/each}
     </div>
-    <label class="row" style="margin-top: 8px"><input type="checkbox" checked={app.settings.ticker.onTop} onchange={(e) => app.saveSettings({ ...app.settings, ticker: { ...app.settings.ticker, onTop: e.currentTarget.checked } })} /> 总在最前面</label>
   </div>
 </div>
 
@@ -161,15 +186,37 @@
   .wrap {
     max-width: 720px;
   }
+  .opts {
+    border-radius: var(--radius);
+    background: var(--fill);
+    overflow: hidden;
+  }
+  .opt {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-height: 40px;
+    padding: 6px 12px;
+  }
+  .opt + .opt {
+    border-top: 0.5px solid var(--line);
+  }
   .syms {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px 14px;
+    gap: 6px;
   }
-  label.row {
-    margin: 4px 0;
-  }
-  code {
+  .sym {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: var(--fill);
     font-size: 12px;
+  }
+  .sym.on {
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
   }
 </style>

@@ -1,31 +1,96 @@
+/* Trafast 桌面版：macOS Liquid Glass 风格。
+ * 三层：窗口背景（Mac 上是系统原生玻璃，其他情况是柔和渐变）→ 浮动玻璃面板（侧栏、工具栏行情条）
+ * → 内容卡片（更不透明，表格读起来清楚）。浅色 / 深色跟随系统。 */
+
 :root {
-  --bg: #0f1115;
-  --panel: #171a21;
-  --panel-2: #1e222b;
-  --line: #2a2f3a;
-  --text: #e6e8ee;
-  --muted: #8b93a7;
-  --up: #26a69a;
-  --down: #ef5350;
-  --accent: #4c8dff;
-  --warn: #f0b429;
-  --l1: #6b7280;
-  --l2: #d97706;
-  --l3: #dc2626;
-  color-scheme: dark;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-  font-size: 14px;
+  /* 系统色（Apple HIG） */
+  --accent: #007aff;
+  --up: #1f9d4c;
+  --down: #e5362b;
+  --warn: #d98300;
+  --l1: #8e8e93;
+  --l2: #ff9500;
+  --l3: #ff3b30;
+
+  --text: #1d1d1f;
+  --text-2: rgba(29, 29, 31, 0.78);
+  --muted: rgba(60, 60, 67, 0.6);
+  --line: rgba(60, 60, 67, 0.12);
+  --line-strong: rgba(60, 60, 67, 0.2);
+  --fill: rgba(120, 120, 128, 0.12); /* 控件底色 */
+  --fill-hover: rgba(120, 120, 128, 0.18);
+  --hover: rgba(0, 0, 0, 0.035);
+
+  /* 玻璃 */
+  --wall: radial-gradient(1200px 700px at 8% -10%, #cfe3ff 0%, transparent 60%),
+    radial-gradient(900px 700px at 100% 0%, #f6d8ec 0%, transparent 55%),
+    radial-gradient(1000px 800px at 60% 110%, #d6f2e6 0%, transparent 60%), #eef0f5;
+  --glass: rgba(255, 255, 255, 0.5);
+  --glass-strong: rgba(255, 255, 255, 0.74);
+  --glass-solid: rgba(255, 255, 255, 0.92);
+  --glass-edge: rgba(255, 255, 255, 0.75); /* 顶部高光 */
+  --glass-rim: rgba(0, 0, 0, 0.08); /* 外圈细线 */
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 8px 28px rgba(31, 38, 64, 0.1);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06), 0 2px 8px rgba(31, 38, 64, 0.06);
+  --blur: saturate(180%) blur(28px);
+
+  --radius-lg: 18px;
+  --radius: 12px;
+  --radius-sm: 8px;
+
+  color-scheme: light;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", "PingFang SC", "Microsoft YaHei UI", sans-serif;
+  font-size: 13px;
+  line-height: 1.4;
+  letter-spacing: -0.003em;
+  -webkit-font-smoothing: antialiased;
 }
 
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme="dark"]) {
-    --bg: #f5f6f8;
-    --panel: #ffffff;
-    --panel-2: #f0f2f5;
-    --line: #dfe3ea;
-    --text: #1b1f27;
-    --muted: #667085;
-    color-scheme: light;
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --accent: #0a84ff;
+    --up: #30d158;
+    --down: #ff453a;
+    --warn: #ffb340;
+    --l1: #98989d;
+    --l2: #ff9f0a;
+    --l3: #ff453a;
+
+    --text: #f5f5f7;
+    --text-2: rgba(245, 245, 247, 0.8);
+    --muted: rgba(235, 235, 245, 0.55);
+    --line: rgba(255, 255, 255, 0.08);
+    --line-strong: rgba(255, 255, 255, 0.14);
+    --fill: rgba(118, 118, 128, 0.24);
+    --fill-hover: rgba(118, 118, 128, 0.32);
+    --hover: rgba(255, 255, 255, 0.04);
+
+    --wall: radial-gradient(1200px 700px at 8% -10%, #1d3263 0%, transparent 60%),
+      radial-gradient(900px 700px at 100% 0%, #3b1f4d 0%, transparent 55%),
+      radial-gradient(1000px 800px at 60% 110%, #133a35 0%, transparent 60%), #111318;
+    --glass: rgba(44, 44, 50, 0.46);
+    --glass-strong: rgba(30, 30, 35, 0.66);
+    --glass-solid: rgba(36, 36, 40, 0.94);
+    --glass-edge: rgba(255, 255, 255, 0.1);
+    --glass-rim: rgba(0, 0, 0, 0.35);
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 10px 32px rgba(0, 0, 0, 0.35);
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3), 0 2px 8px rgba(0, 0, 0, 0.2);
+
+    color-scheme: dark;
+  }
+}
+
+/* Mac 上窗口本身就是系统玻璃（tauri.macos.conf.json 里的 windowEffects），网页背景透明，
+ * 面板再淡一点让系统材质透出来。 */
+html.vibrant {
+  --wall: transparent;
+  --glass: rgba(255, 255, 255, 0.34);
+  --glass-strong: rgba(255, 255, 255, 0.66);
+}
+@media (prefers-color-scheme: dark) {
+  html.vibrant:not([data-theme="light"]) {
+    --glass: rgba(40, 40, 46, 0.3);
+    --glass-strong: rgba(28, 28, 32, 0.58);
   }
 }
 
@@ -37,13 +102,60 @@ html,
 body {
   margin: 0;
   height: 100%;
-  background: var(--bg);
   color: var(--text);
+  background: var(--wall);
+  background-attachment: fixed;
 }
 
 #app {
   height: 100%;
 }
+
+::selection {
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+/* ---- 玻璃面板 ---- */
+
+.glass {
+  background: var(--glass);
+  -webkit-backdrop-filter: var(--blur);
+  backdrop-filter: var(--blur);
+  border: 0.5px solid var(--glass-rim);
+  box-shadow: inset 0 1px 0 var(--glass-edge), var(--shadow);
+}
+
+.card,
+.sheet {
+  background: var(--glass-strong);
+  -webkit-backdrop-filter: var(--blur);
+  backdrop-filter: var(--blur);
+  border: 0.5px solid var(--glass-rim);
+  box-shadow: inset 0 1px 0 var(--glass-edge), var(--shadow-sm);
+  border-radius: var(--radius-lg);
+}
+
+.card {
+  padding: 16px 18px;
+  margin-bottom: 14px;
+}
+
+.card h2 {
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.card > p:first-of-type {
+  margin-top: 0;
+}
+
+.sheet {
+  overflow: hidden;
+}
+
+/* ---- 控件 ---- */
 
 button,
 input,
@@ -53,46 +165,170 @@ select {
 }
 
 button {
-  background: var(--panel-2);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 5px 12px;
-  cursor: pointer;
+  background: var(--fill);
+  border: none;
+  border-radius: 999px;
+  padding: 5px 14px;
+  cursor: default;
+  font-weight: 500;
+  transition: background 0.15s, transform 0.1s, box-shadow 0.15s;
+  white-space: nowrap;
 }
 
 button:hover:not(:disabled) {
-  border-color: var(--accent);
+  background: var(--fill-hover);
+}
+
+button:active:not(:disabled) {
+  transform: scale(0.97);
 }
 
 button:disabled {
-  opacity: 0.5;
-  cursor: default;
+  opacity: 0.45;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  outline-offset: 1px;
 }
 
 button.primary {
   background: var(--accent);
-  border-color: var(--accent);
   color: #fff;
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--accent) 40%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+}
+
+button.primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 88%, #fff);
 }
 
 button.small {
-  padding: 2px 8px;
+  padding: 3px 10px;
   font-size: 12px;
 }
 
-input,
-select {
-  background: var(--panel-2);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 6px 10px;
+button.plain {
+  background: transparent;
 }
 
-input:focus,
+button.plain:hover:not(:disabled) {
+  background: var(--fill);
+}
+
+input:not([type="checkbox"]):not([type="radio"]),
+select {
+  background: var(--fill);
+  border: 0.5px solid transparent;
+  border-radius: var(--radius-sm);
+  padding: 5px 10px;
+  min-height: 28px;
+  transition: background 0.15s, box-shadow 0.15s;
+}
+
+input:not([type="checkbox"]):not([type="radio"]):focus,
 select:focus {
   outline: none;
-  border-color: var(--accent);
+  background: var(--glass-solid);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 40%, transparent);
 }
+
+input::placeholder {
+  color: var(--muted);
+}
+
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 26px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='12' viewBox='0 0 10 12'%3E%3Cpath d='M2 4.5 5 1.5l3 3M2 7.5l3 3 3-3' fill='none' stroke='%238e8e93' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 9px center;
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--accent);
+  width: 14px;
+  height: 14px;
+  margin: 0;
+}
+
+/* 开关（macOS 风格），用法：<input type="checkbox" class="switch"> */
+input.switch {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 30px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--fill-hover);
+  position: relative;
+  transition: background 0.2s;
+  flex: none;
+}
+input.switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  transition: transform 0.2s;
+}
+input.switch:checked {
+  background: var(--up);
+}
+input.switch:checked::after {
+  transform: translateX(12px);
+}
+input.switch:disabled {
+  opacity: 0.5;
+}
+
+/* 分段控件，用法：<div class="seg"><button class:sel>…</button>…</div> */
+.seg {
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  border-radius: 999px;
+  background: var(--fill);
+}
+.seg button {
+  background: transparent;
+  padding: 3px 12px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.seg button:hover:not(:disabled) {
+  background: var(--hover);
+}
+.seg button.sel {
+  background: var(--glass-solid);
+  color: var(--text);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 0 0 0.5px rgba(0, 0, 0, 0.04);
+}
+
+.search {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.search svg {
+  position: absolute;
+  left: 9px;
+  color: var(--muted);
+  pointer-events: none;
+}
+.search input {
+  padding-left: 28px !important;
+  border-radius: 999px !important;
+}
+
+/* ---- 表格 ---- */
 
 table {
   width: 100%;
@@ -102,27 +338,60 @@ table {
 th,
 td {
   text-align: left;
-  padding: 7px 10px;
-  border-bottom: 1px solid var(--line);
+  padding: 8px 12px;
   white-space: nowrap;
+}
+
+td {
+  border-top: 0.5px solid var(--line);
+  height: 36px;
+  vertical-align: middle;
+}
+
+tbody tr:first-child td {
+  border-top: none;
 }
 
 th {
   color: var(--muted);
   font-weight: 500;
-  font-size: 12px;
+  font-size: 11px;
+  letter-spacing: 0.02em;
   position: sticky;
   top: 0;
-  background: var(--panel);
+  z-index: 1;
+  background: var(--glass-solid);
+  -webkit-backdrop-filter: var(--blur);
+  backdrop-filter: var(--blur);
+  border-bottom: 0.5px solid var(--line-strong);
 }
 
-tr.click {
-  cursor: pointer;
+.sheet th {
+  background: color-mix(in srgb, var(--glass-solid) 70%, transparent);
+}
+
+tr.click td {
+  transition: background 0.12s;
 }
 
 tr.click:hover td {
-  background: var(--panel-2);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
 }
+
+.card table td,
+.card table th {
+  padding-left: 6px;
+  padding-right: 6px;
+}
+
+.card table th {
+  background: transparent;
+  position: static;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* ---- 文字和标签 ---- */
 
 .up {
   color: var(--up);
@@ -141,8 +410,9 @@ tr.click:hover td {
 }
 
 .mono {
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-family: "SF Mono", ui-monospace, Menlo, "Cascadia Mono", Consolas, monospace;
   font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
 }
 
 .num {
@@ -150,41 +420,52 @@ tr.click:hover td {
   font-variant-numeric: tabular-nums;
 }
 
-.card {
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 14px 16px;
-  margin-bottom: 14px;
-}
-
-.card h2 {
-  margin: 0 0 10px;
-  font-size: 15px;
-}
-
 .badge {
-  display: inline-block;
-  padding: 1px 7px;
-  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 7px;
+  border-radius: 999px;
   font-size: 11px;
-  border: 1px solid var(--line);
-  color: var(--muted);
+  font-weight: 500;
+  background: var(--fill);
+  color: var(--text-2);
 }
 
 .badge.L1 {
-  border-color: var(--l1);
+  color: var(--l1);
+  background: color-mix(in srgb, var(--l1) 14%, transparent);
 }
 
 .badge.L2 {
-  border-color: var(--l2);
   color: var(--l2);
+  background: color-mix(in srgb, var(--l2) 16%, transparent);
 }
 
 .badge.L3 {
-  border-color: var(--l3);
-  background: var(--l3);
   color: #fff;
+  background: var(--l3);
+  box-shadow: 0 1px 4px color-mix(in srgb, var(--l3) 45%, transparent);
+}
+
+.badge.tag-vol {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.badge.tag-big_buy {
+  color: var(--up);
+  background: color-mix(in srgb, var(--up) 13%, transparent);
+}
+
+.badge.tag-big_sell {
+  color: var(--down);
+  background: color-mix(in srgb, var(--down) 12%, transparent);
+}
+
+.badge.tag-level {
+  color: #af52de;
+  background: color-mix(in srgb, #af52de 13%, transparent);
 }
 
 .err {
@@ -202,6 +483,18 @@ tr.click:hover td {
   flex-wrap: wrap;
 }
 
+.toolbar-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.grow {
+  flex: 1;
+}
+
 .field {
   display: flex;
   flex-direction: column;
@@ -214,6 +507,44 @@ tr.click:hover td {
   color: var(--muted);
 }
 
+.empty {
+  padding: 48px 16px;
+  text-align: center;
+  color: var(--muted);
+}
+
 .scroll {
   overflow: auto;
+}
+
+code {
+  font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: 11.5px;
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--fill);
+}
+
+/* 滚动条：细、圆、只在悬停时明显 */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+:hover::-webkit-scrollbar-thumb {
+  background-color: var(--line-strong);
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+  }
 }

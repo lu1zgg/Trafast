@@ -32,23 +32,26 @@
   }
 </script>
 
-<div class="row bar">
+<div class="toolbar-row">
   <select bind:value={group}>
     <option value="">全部分组</option>
     {#each Object.keys(app.groups) as g}<option value={g}>{g}</option>{/each}
   </select>
-  <select bind:value={market}>
-    <option value="">全部市场</option>
-    {#each Object.entries(MARKET_LABELS) as [k, v]}<option value={k}>{v}</option>{/each}
-  </select>
+  <div class="seg" role="group" aria-label="市场">
+    <button class:sel={market === ""} onclick={() => (market = "")}>全部</button>
+    {#each Object.entries(MARKET_LABELS) as [k, v]}<button class:sel={market === k} onclick={() => (market = k)}>{v}</button>{/each}
+  </div>
   {#if market && app.canWrite}
     {#if marketMuted}<button class="small" onclick={() => muteMarket(false)}>取消{MARKET_LABELS[market]}静音</button>
     {:else}<button class="small" onclick={() => muteMarket(true)}>静音全部{MARKET_LABELS[market]} 1 小时</button>{/if}
   {/if}
-  <button class="small" onclick={() => app.loadSymbols()}>刷新</button>
+  <div class="grow"></div>
   {#if err}<span class="err small">{err}</span>{/if}
+  <span class="muted small">{rows.length} 个标的</span>
+  <button class="small" onclick={() => app.loadSymbols()}>刷新</button>
 </div>
 
+<div class="sheet">
 <table>
   <thead>
     <tr><th>标的</th><th>市场</th><th class="num">现价</th><th class="num">当日涨跌</th><th>时段</th><th>分组</th><th>状态</th>{#if app.canWrite}<th></th>{/if}</tr>
@@ -58,7 +61,7 @@
       <tr class="click" onclick={() => app.open(s.symbol)}>
         <td><b>{displayName(s.symbol)}</b></td>
         <td class="muted">{MARKET_LABELS[s.market] ?? s.market}</td>
-        <td class="num mono">{fmtPrice(s.price)}</td>
+        <td class="num mono strong">{fmtPrice(s.price)}</td>
         <td class="num mono" class:up={(s.day_chg ?? 0) > 0} class:down={(s.day_chg ?? 0) < 0}>{fmtPct(s.day_chg, 2, true)}</td>
         <td class="muted small">{s.session_label}</td>
         <td class="muted small">{s.groups.join("、")}</td>
@@ -71,13 +74,14 @@
         {/if}
       </tr>
     {:else}
-      <tr><td colspan="8" class="muted">没有标的。</td></tr>
+      <tr><td colspan="8" class="empty">没有标的。</td></tr>
     {/each}
   </tbody>
 </table>
+</div>
 
 <style>
-  .bar {
-    margin-bottom: 10px;
+  .strong {
+    font-weight: 600;
   }
 </style>

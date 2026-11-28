@@ -3,6 +3,11 @@
 
 export type Level = "L1" | "L2" | "L3";
 
+export type TickerSpeed = "slow" | "normal" | "fast";
+
+/** 行情条滚动速度（像素 / 秒）。 */
+export const TICKER_SPEED: Record<TickerSpeed, number> = { slow: 32, normal: 52, fast: 84 };
+
 export interface Settings {
   server: string; // 规范化后的地址，例如 https://mm.example.com
   notify: {
@@ -13,14 +18,16 @@ export interface Settings {
   };
   ticker: {
     symbols: string[]; // 行情条显示哪些标的；空 = 全部
-    onTop: boolean;
+    onTop: boolean; // 屏幕顶部那条（单独的小窗）总在最前面
+    speed: TickerSpeed;
+    news: boolean; // 行情条里插播最近的异动快讯
   };
 }
 
 export const DEFAULT_SETTINGS: Settings = {
   server: "",
   notify: { enabled: true, minLevel: "L1", upgrades: true, sound: true },
-  ticker: { symbols: [], onTop: true },
+  ticker: { symbols: [], onTop: true, speed: "normal", news: true },
 };
 
 const KEY = "trafast.settings.v1";

@@ -91,7 +91,8 @@
         <button class="primary" onclick={add} disabled={busy || !text.trim()}>添加</button>
       </div>
       <div class="row ex">
-        {#each examples as ex}<button class="small" onclick={() => (text = ex)}>{ex}</button>{/each}
+        <span class="muted small">示例</span>
+        {#each examples as ex}<button class="small chip mono" onclick={() => (text = ex)}>{ex}</button>{/each}
       </div>
     {:else}
       <p class="muted">当前密钥是只读的，只能查看。</p>
@@ -109,7 +110,7 @@
             {#if app.canWrite}<td><button class="small" onclick={() => del(r.id)}>删除</button></td>{/if}
           </tr>
         {:else}
-          <tr><td colspan="4" class="muted">还没有自定义提醒。</td></tr>
+          <tr><td colspan="4" class="muted empty">还没有自定义提醒。</td></tr>
         {/each}
       </tbody>
     </table>
@@ -128,9 +129,9 @@
       </div>
       <div class="types">
         {#each Object.entries(types.labels ?? PATTERN_LABELS) as [p, label]}
-          <label class="row">
-            <input type="checkbox" checked={!isOff(p)} disabled={!app.canWrite} onchange={(e) => setType(p, !e.currentTarget.checked)} />
-            {label}
+          <label class="type">
+            <span>{label}</span>
+            <input type="checkbox" class="switch" checked={!isOff(p)} disabled={!app.canWrite} onchange={(e) => setType(p, !e.currentTarget.checked)} />
           </label>
         {/each}
       </div>
@@ -143,11 +144,25 @@
     max-width: 860px;
   }
   .ex {
-    margin: 8px 0 12px;
+    margin: 10px 0 14px;
+    gap: 6px;
+  }
+  .chip {
+    font-size: 11.5px;
+    font-weight: 400;
   }
   .types {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+    gap: 8px;
+    margin-top: 12px;
+  }
+  .type {
     display: flex;
-    gap: 18px;
-    margin-top: 10px;
+    align-items: center;
+    justify-content: space-between;
+    padding: 9px 12px;
+    border-radius: var(--radius);
+    background: var(--fill);
   }
 </style>

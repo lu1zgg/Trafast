@@ -103,3 +103,11 @@ export function shouldNotify(s: Signal, n: { enabled: boolean; minLevel: string;
   if (s.kind !== "open" && !(s.kind === "upgrade" && n.upgrades)) return false;
   return (LEVEL_RANK[s.level] ?? 1) >= (LEVEL_RANK[n.minLevel] ?? 1);
 }
+
+/** 行情条插播的快讯：最近 minutes 分钟内的首发和升级，最新的在前，最多 n 条。 */
+export function recentNews<T extends Pick<Signal, "ts" | "kind" | "seq">>(signals: T[], nowSec: number, minutes = 60, n = 4): T[] {
+  return signals
+    .filter((s) => (s.kind === "open" || s.kind === "upgrade") && nowSec - s.ts <= minutes * 60)
+    .sort((a, b) => b.ts - a.ts || b.seq - a.seq)
+    .slice(0, n);
+}

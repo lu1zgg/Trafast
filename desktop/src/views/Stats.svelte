@@ -48,17 +48,20 @@
   </tr>
 {/snippet}
 
-<div class="row bar-top">
-  <button class="small" class:sel={win === "recent"} onclick={() => (win = "recent")}>最近 {st?.recent_min ?? 30} 分钟</button>
-  <button class="small" class:sel={win === "today"} onclick={() => (win = "today")}>今天</button>
-  <button class="small" onclick={load}>刷新</button>
-  {#if st}<span class="muted small">更新于 {fmtClock(st.t)}；括号里按级别加权（L1 = 1，L2 = 2，L3 = 3）；每段行情只算一次</span>{/if}
+<div class="toolbar-row">
+  <div class="seg" role="group" aria-label="时间范围">
+    <button class:sel={win === "recent"} onclick={() => (win = "recent")}>最近 {st?.recent_min ?? 30} 分钟</button>
+    <button class:sel={win === "today"} onclick={() => (win = "today")}>今天</button>
+  </div>
+  {#if st}<span class="muted small">更新于 {fmtClock(st.t)} · 括号里按级别加权（L1 = 1，L2 = 2，L3 = 3）· 每段行情只算一次</span>{/if}
+  <div class="grow"></div>
   {#if err}<span class="err small">{err}</span>{/if}
+  <button class="small" onclick={load}>刷新</button>
 </div>
 
 {#if t}
   {#if t.total.up_n + t.total.down_n === 0}
-    <p class="muted">这段时间没有异动。</p>
+    <div class="sheet empty">这段时间没有异动。</div>
   {:else}
     <div class="cols">
       <div class="card">
@@ -95,13 +98,10 @@
     </div>
   {/if}
 {:else if !err}
-  <p class="muted">加载中…</p>
+  <div class="sheet empty">加载中…</div>
 {/if}
 
 <style>
-  .bar-top {
-    margin-bottom: 12px;
-  }
   .cols {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -115,18 +115,19 @@
   .barcell {
     width: 35%;
   }
+  .cols .card {
+    margin-bottom: 0;
+  }
   .bar {
-    height: 8px;
-    border-radius: 4px;
-    background: var(--down);
+    height: 6px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--down) 75%, transparent);
     overflow: hidden;
+    display: flex;
   }
   .bull {
     height: 100%;
     background: var(--up);
-  }
-  button.sel {
-    border-color: var(--accent);
-    color: var(--accent);
+    border-right: 2px solid var(--glass-solid);
   }
 </style>

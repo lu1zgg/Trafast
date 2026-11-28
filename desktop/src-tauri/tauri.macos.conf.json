@@ -1,0 +1,53 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Trafast 异动监控",
+        "url": "index.html",
+        "width": 1200,
+        "height": 780,
+        "minWidth": 960,
+        "minHeight": 560,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "transparent": true,
+        "trafficLightPosition": {
+          "x": 20,
+          "y": 22
+        },
+        "windowEffects": {
+          "effects": [
+            "liquidGlassRegular",
+            "sidebar"
+          ],
+          "state": "followsWindowActiveState"
+        }
+      },
+      {
+        "label": "ticker",
+        "title": "Trafast 行情条",
+        "url": "index.html#ticker",
+        "width": 780,
+        "height": 34,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "visible": false,
+        "shadow": false,
+        "transparent": true,
+        "focus": false,
+        "windowEffects": {
+          "effects": [
+            "liquidGlassRegular",
+            "hudWindow"
+          ],
+          "state": "active",
+          "radius": 17
+        }
+      }
+    ]
+  }
+}
