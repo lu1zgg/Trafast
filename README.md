@@ -316,6 +316,7 @@ Discord 里用同名的斜杠命令（`/mute` 的标的和时长是两个参数�
 
 - 请求头 `Authorization: Bearer tfk_…`。read 权限只能看；write 还能改提醒、类型开关、静音、反馈。
 - 同一 IP 连续错 10 次封 15 分钟。允许跨域（只认 Bearer 密钥，不用 Cookie）。
+- 桌面版左下角一直显示「重连中」、但信号列表能加载：说明 REST 通了、WebSocket 没通，多半是反向代理没转发 WebSocket。用 Caddy（`setup-web.sh`）不会有这个问题；用 nginx 或宝塔、1Panel 等面板的话，照 [deploy/nginx.conf.example](deploy/nginx.conf.example) 给 `/api/v1/stream` 加上 `Upgrade` / `Connection` 头（面板里一般叫「WebSocket 支持」）。
 
 ### 关键位突破
 
@@ -423,7 +424,7 @@ market_monitor_v3/
   cli.py         monitor 命令
   web/           网页管理后台（FastAPI + Jinja2 服务端渲染，无前端构建步骤）；api.py 是 /api/v1
 desktop/         桌面版（Tauri 2 + Svelte，Mac 和 Windows），见 desktop/README.md
-deploy/          systemd 服务、install.sh、upgrade.sh、setup-web.sh、Caddy 示例、mm、配置和密钥示例
+deploy/          systemd 服务、install.sh、upgrade.sh、setup-web.sh、Caddy 和 nginx 示例、mm、配置和密钥示例
 ```
 
 ## Logo
