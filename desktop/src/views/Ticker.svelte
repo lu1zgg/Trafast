@@ -1,23 +1,26 @@
 <script lang="ts">
-  // 浮动行情条：单独的小窗口，没有边框，可以拖动；每 5 秒拉一次 /quotes。
+  // 屏幕顶部的行情条：单独的小窗，固定在当前屏幕顶部正中（位置由 Rust 端在显示时摆好），
+  // 内容和主窗口工具栏里的行情条一样匀速滚动。每 5 秒拉一次 /quotes，每 30 秒拉一次最近信号做快讯。
   import { onDestroy, onMount } from "svelte";
   import { ApiClient } from "../lib/api";
-  import { SETTINGS_KEY, loadSettings, type Settings } from "../lib/config";
-  import { displayName, fmtPct, fmtPrice } from "../lib/format";
+  import { SETTINGS_KEY, TICKER_SPEED, loadSettings, type Settings } from "../lib/config";
+  import { recentNews } from "../lib/format";
   import { getKey, inTauri } from "../lib/secrets";
-  import type { Quote } from "../lib/types";
+  import type { Quote, Signal } from "../lib/types";
+  import TickerCrawl from "./TickerCrawl.svelte";
 
   let settings = $state<Settings>(loadSettings());
   let quotes = $state<Quote[]>([]);
+  let signals = $state<Signal[]>([]);
   let err = $state("");
   let client: ApiClient | null = null;
   let timer: ReturnType<typeof setInterval> | undefined;
-  let prev: Record<string, number> = {};
-  let flash = $state<Record<string, number>>({});
+  let n = 0;
 
   const shown = $derived(
-    settings.ticker.symbols.length ? quotes.filter((q) => settings.ticker.symbols.includes(q.symbol)) : quotes,
+    (settings.ticker.symbols.length ? quotes.filter((q) => settings.ticker.symbols.includes(q.symbol)) : quotes).filter((q) => q.price !== null),
   );
+  const news = $derived(settings.ticker.news ? recentNews(signals, Math.floor(Date.now() / 1000)) : []);
 
   async function setup() {
     client = null;
@@ -28,21 +31,20 @@
       return;
     }
     client = new ApiClient(settings.server, key);
+    n = 0;
     await tick();
   }
 
   async function tick() {
     if (!client) return;
     try {
-      const r = await client.quotes();
-      const f: Record<string, number> = {};
-      for (const q of r.items) {
-        const p = prev[q.symbol];
-        if (q.price !== null && p !== undefined && q.price !== p) f[q.symbol] = q.price > p ? 1 : -1;
-        if (q.price !== null) prev[q.symbol] = q.price;
-      }
-      flash = f;
+      const wantNews = settings.ticker.news && n++ % 6 === 0;
+      const [r, s] = await Promise.all([
+        client.quotes(),
+        wantNews ? client.signals({ since: Math.floor(Date.now() / 1000) - 3600, limit: 200 }) : Promise.resolve(null),
+      ]);
       quotes = r.items;
+      if (s) signals = s.items;
       err = "";
     } catch (e) {
       err = (e as Error).message;
@@ -69,6 +71,12 @@
     await getCurrentWindow().hide();
   }
 
+  async function openMain(symbol: string) {
+    if (!inTauri()) return;
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("show_main_symbol", { symbol });
+  }
+
   onMount(() => {
     document.documentElement.classList.add("ticker-mode");
     window.addEventListener("storage", onStorage);
@@ -83,69 +91,54 @@
   });
 </script>
 
-<div class="ticker" data-tauri-drag-region>
-  {#if err}
-    <span class="muted" data-tauri-drag-region>{err}</span>
-  {:else}
-    {#each shown as q (q.symbol)}
-      <span class="item" data-tauri-drag-region>
-        <b data-tauri-drag-region>{displayName(q.symbol)}</b>
-        <span class="mono" class:fu={flash[q.symbol] === 1} class:fd={flash[q.symbol] === -1} data-tauri-drag-region>{fmtPrice(q.price)}</span>
-        <span class="mono" class:up={(q.day_chg ?? 0) > 0} class:down={(q.day_chg ?? 0) < 0} data-tauri-drag-region>{fmtPct(q.day_chg, 2, true)}</span>
-      </span>
-    {/each}
-  {/if}
-  <button class="x" onclick={hide} title="隐藏行情条">×</button>
+<div class="bar">
+  <TickerCrawl quotes={shown} {news} speed={TICKER_SPEED[settings.ticker.speed] ?? 52} message={err} onpick={openMain} />
+  <button class="x" onclick={hide} title="隐藏行情条" aria-label="隐藏行情条">
+    <svg width="10" height="10" viewBox="0 0 10 10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M2 2l6 6M8 2 2 8" /></svg>
+  </button>
 </div>
 
 <style>
   :global(html.ticker-mode),
   :global(html.ticker-mode body) {
-    background: var(--panel);
+    background: transparent;
     overflow: hidden;
   }
-  .ticker {
+  /* Mac 上窗口本身是系统玻璃（圆角由 windowEffects.radius 给）；其他系统用半透明底色 */
+  .bar {
     display: flex;
     align-items: center;
-    gap: 18px;
     height: 100vh;
-    padding: 0 30px 0 12px;
-    white-space: nowrap;
-    overflow-x: auto;
-    scrollbar-width: none;
+    border-radius: 999px;
+    background: var(--glass-solid);
+    border: 0.5px solid var(--glass-rim);
+    box-shadow: inset 0 1px 0 var(--glass-edge);
+    overflow: hidden;
     user-select: none;
-    cursor: move;
-    font-size: 13px;
   }
-  .item {
-    display: inline-flex;
-    gap: 6px;
+  :global(html.vibrant) .bar {
+    background: transparent;
+    border: none;
+    box-shadow: none;
   }
-  .fu {
-    animation: fu 1s;
-  }
-  .fd {
-    animation: fd 1s;
-  }
-  @keyframes fu {
-    from {
-      background: color-mix(in srgb, var(--up) 45%, transparent);
-    }
-  }
-  @keyframes fd {
-    from {
-      background: color-mix(in srgb, var(--down) 45%, transparent);
-    }
+  .bar > :global(.ticker) {
+    flex: 1;
+    min-width: 0;
   }
   .x {
-    position: fixed;
-    right: 4px;
-    top: 50%;
-    transform: translateY(-50%);
-    border: none;
-    background: transparent;
+    flex: none;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    margin-right: 7px;
+    display: grid;
+    place-items: center;
+    background: var(--fill);
     color: var(--muted);
-    padding: 0 6px;
-    font-size: 16px;
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+  .bar:hover .x {
+    opacity: 1;
   }
 </style>

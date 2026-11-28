@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { ApiClient, ApiError, SignalStream } from "./api";
 import { DEFAULT_SETTINGS, looksLikeKey, loadSettings, normalizeServer, wsUrl } from "./config";
-import { displayName, fmtPct, movePct, notifyText, shouldNotify } from "./format";
+import { displayName, fmtPct, movePct, notifyText, recentNews, shouldNotify } from "./format";
 import type { Signal } from "./types";
 
 describe("normalizeServer", () => {
@@ -159,5 +159,19 @@ describe("SignalStream", () => {
     expect(fatal).toContain("吊销");
     expect(timeouts.length).toBe(0);
     expect(states[states.length - 1]).toBe("stopped");
+  });
+});
+
+describe("ticker", () => {
+  it("picks recent opens and upgrades, newest first", () => {
+    const now = 100_000;
+    const mk = (seq: number, ts: number, kind: Signal["kind"]) => ({ seq, ts, kind });
+    const r = recentNews([mk(1, now - 4000, "open"), mk(2, now - 100, "extend"), mk(3, now - 200, "open"), mk(4, now - 50, "upgrade")], now);
+    expect(r.map((s) => s.seq)).toEqual([4, 3]);
+    expect(recentNews([mk(1, now, "open"), mk(2, now, "open"), mk(3, now, "open")], now, 60, 2)).toHaveLength(2);
+  });
+  it("old settings get the new ticker defaults", () => {
+    const s = loadSettings({ getItem: () => JSON.stringify({ server: "https://x", ticker: { symbols: ["NVDA.US"], onTop: false } }) });
+    expect(s.ticker).toEqual({ symbols: ["NVDA.US"], onTop: false, speed: "normal", news: true });
   });
 });

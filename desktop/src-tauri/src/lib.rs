@@ -1,10 +1,10 @@
-//! Trafast 桌面版的原生部分：系统钥匙串存 API 密钥、托盘菜单、浮动行情条窗口。
+//! Trafast 桌面版的原生部分：系统钥匙串存 API 密钥、托盘菜单、屏幕顶部行情条窗口。
 //! 界面和所有网络请求都在前端（WebView）里，直接连用户自己部署的服务器。
 
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Manager, WindowEvent,
+    AppHandle, Emitter, Manager, PhysicalPosition, WebviewWindow, WindowEvent,
 };
 
 const SERVICE: &str = "Trafast";
@@ -50,14 +50,39 @@ fn show_main(app: &AppHandle) {
     }
 }
 
+/// 把行情条摆到主窗口所在屏幕（没有就用主屏）的顶部正中，菜单栏 / 任务栏以外的区域里。
+fn dock_ticker(app: &AppHandle, w: &WebviewWindow) {
+    let monitor = app
+        .get_webview_window("main")
+        .and_then(|m| m.current_monitor().ok().flatten())
+        .or_else(|| w.primary_monitor().ok().flatten());
+    let (Some(m), Ok(size)) = (monitor, w.outer_size()) else { return };
+    let area = m.work_area();
+    let gap = (8.0 * m.scale_factor()).round() as i32;
+    let x = area.position.x + (area.size.width as i32 - size.width as i32) / 2;
+    let y = area.position.y + gap;
+    let _ = w.set_position(PhysicalPosition::new(x, y));
+}
+
 fn toggle_ticker_window(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("ticker") {
         if w.is_visible().unwrap_or(false) {
             let _ = w.hide();
         } else {
+            dock_ticker(app, &w);
             let _ = w.show();
         }
     }
+}
+
+/// 点屏幕顶部行情条上的标的：叫出主窗口并打开这个标的的详情。
+#[tauri::command]
+fn show_main_symbol(app: AppHandle, symbol: String) {
+    if symbol.is_empty() || symbol.len() > 40 {
+        return;
+    }
+    show_main(&app);
+    let _ = app.emit_to("main", "open-symbol", symbol);
 }
 
 #[tauri::command]
@@ -67,7 +92,7 @@ fn toggle_ticker(app: AppHandle) {
 
 fn build_tray(app: &tauri::App) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "打开主窗口", true, None::<&str>)?;
-    let ticker = MenuItem::with_id(app, "ticker", "显示 / 隐藏行情条", true, None::<&str>)?;
+    let ticker = MenuItem::with_id(app, "ticker", "显示 / 隐藏屏幕顶部行情条", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "退出 Trafast", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&open, &ticker, &sep, &quit])?;
@@ -99,7 +124,7 @@ pub fn run() {
         // 再次打开程序时把已有的窗口叫出来，而不是开第二个
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
         .plugin(tauri_plugin_notification::init())
-        .invoke_handler(tauri::generate_handler![secret_get, secret_set, secret_delete, toggle_ticker])
+        .invoke_handler(tauri::generate_handler![secret_get, secret_set, secret_delete, toggle_ticker, show_main_symbol])
         .setup(|app| {
             build_tray(app)?;
             Ok(())

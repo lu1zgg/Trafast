@@ -17,6 +17,7 @@
   import { app } from "../lib/state.svelte";
   import { KIND_LABELS, displayName, fmtPct, fmtPrice, fmtTime, movePct, patternName } from "../lib/format";
   import type { Bar, Levels, Zone } from "../lib/types";
+  import Icon from "./Icon.svelte";
 
   let tf = $state<"1m" | "15m">("15m");
   let levels = $state<Levels | null>(null);
@@ -41,9 +42,10 @@
     if (chart || !el) return;
     chart = createChart(el, {
       autoSize: true,
-      layout: { background: { type: ColorType.Solid, color: css("--panel") }, textColor: css("--muted") },
-      grid: { vertLines: { color: css("--line") }, horzLines: { color: css("--line") } },
-      timeScale: { timeVisible: true, secondsVisible: false },
+      layout: { background: { type: ColorType.Solid, color: "transparent" }, textColor: css("--muted"), fontFamily: getComputedStyle(document.documentElement).fontFamily },
+      grid: { vertLines: { visible: false }, horzLines: { color: css("--line") } },
+      rightPriceScale: { borderVisible: false },
+      timeScale: { borderVisible: false, timeVisible: true, secondsVisible: false },
       localization: { locale: "zh-CN" },
     });
     series = chart.addSeries(CandlestickSeries, {
@@ -125,20 +127,22 @@
   <p class="muted">从「信号」或「标的」里点一个标的。</p>
 {:else}
   <div class="row head">
-    <button class="small" onclick={() => (app.view = "symbols")}>← 返回</button>
+    <button class="small back" onclick={() => (app.view = "symbols")}><Icon name="back" size={12} /> 返回</button>
     <h1>{displayName(sym)}</h1>
     {#if quote}
       <span class="mono price">{fmtPrice(quote.price)}</span>
       <span class="mono" class:up={(quote.day_chg ?? 0) > 0} class:down={(quote.day_chg ?? 0) < 0}>{fmtPct(quote.day_chg, 2, true)}</span>
     {/if}
     <div style="flex: 1"></div>
-    <button class="small" class:sel={tf === "1m"} onclick={() => (tf = "1m")}>1 分钟</button>
-    <button class="small" class:sel={tf === "15m"} onclick={() => (tf = "15m")}>15 分钟</button>
+    <div class="seg" role="group" aria-label="周期">
+      <button class:sel={tf === "1m"} onclick={() => (tf = "1m")}>1 分钟</button>
+      <button class:sel={tf === "15m"} onclick={() => (tf = "15m")}>15 分钟</button>
+    </div>
     <button class="small" onclick={load} disabled={loading}>刷新</button>
   </div>
   {#if err}<p class="err">{err}</p>{/if}
 
-  <div class="chart" bind:this={el}></div>
+  <div class="sheet chart-box"><div class="chart" bind:this={el}></div></div>
 
   <div class="cols">
     <div class="card">
@@ -189,17 +193,28 @@
   }
   h1 {
     margin: 0;
-    font-size: 20px;
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
   }
   .price {
     font-size: 18px;
+    font-weight: 600;
+  }
+  .chart-box {
+    padding: 10px 6px 4px 10px;
+    margin-bottom: 14px;
   }
   .chart {
     height: 420px;
-    border: 1px solid var(--line);
-    border-radius: 10px;
-    overflow: hidden;
-    margin-bottom: 14px;
+  }
+  .back {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+  }
+  .cols .card {
+    margin-bottom: 0;
   }
   .cols {
     display: grid;
@@ -211,8 +226,5 @@
       grid-template-columns: 1fr;
     }
   }
-  button.sel {
-    border-color: var(--accent);
-    color: var(--accent);
-  }
+
 </style>

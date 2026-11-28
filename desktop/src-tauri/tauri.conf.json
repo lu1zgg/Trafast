@@ -18,36 +18,59 @@
         "url": "index.html",
         "width": 1200,
         "height": 780,
-        "minWidth": 900,
+        "minWidth": 960,
         "minHeight": 560
       },
       {
         "label": "ticker",
         "title": "Trafast 行情条",
         "url": "index.html#ticker",
-        "width": 900,
-        "height": 36,
-        "minHeight": 30,
+        "width": 780,
+        "height": 34,
         "decorations": false,
         "alwaysOnTop": true,
         "skipTaskbar": true,
-        "resizable": true,
+        "resizable": false,
         "visible": false,
-        "shadow": false
+        "shadow": false,
+        "transparent": true,
+        "focus": false
       }
     ],
     "security": {
       "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost https: wss: http://127.0.0.1:* ws://127.0.0.1:* http://localhost:* ws://localhost:*; img-src 'self' data:; style-src 'self' 'unsafe-inline'"
-    }
+    },
+    "macOSPrivateApi": true
   },
   "bundle": {
     "active": true,
-    "targets": ["app", "dmg", "nsis", "msi"],
+    "targets": [
+      "app",
+      "dmg",
+      "nsis",
+      "msi"
+    ],
     "category": "Finance",
     "shortDescription": "Trafast 异动监控桌面版",
-    "longDescription": "连接你自己部署的 Trafast 服务器：实时信号、系统通知、浮动行情条、K 线和关键位、异动统计、自定义提醒。",
-    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
-    "macOS": { "minimumSystemVersion": "11.0" },
-    "windows": { "nsis": { "languages": ["SimpChinese", "English"], "displayLanguageSelector": false } }
+    "longDescription": "连接你自己部署的 Trafast 服务器：实时信号、系统通知、顶部滚动行情条、K 线和关键位、异动统计、自定义提醒。",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "11.0"
+    },
+    "windows": {
+      "nsis": {
+        "languages": [
+          "SimpChinese",
+          "English"
+        ],
+        "displayLanguageSelector": false
+      }
+    }
   }
 }
