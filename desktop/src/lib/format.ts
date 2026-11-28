@@ -24,7 +24,7 @@ export const TAG_LABELS: Record<string, string> = {
   level: "关键位",
 };
 
-export const MARKET_LABELS: Record<string, string> = { US: "美股", CRYPTO: "加密" };
+export const MARKET_LABELS: Record<string, string> = { US: "美股", CRYPTO: "加密", CMDTY: "大宗商品" };
 
 export const LEVEL_RANK: Record<string, number> = { L1: 1, L2: 2, L3: 3 };
 

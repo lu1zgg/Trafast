@@ -18,7 +18,7 @@ from .detector import evaluate
 from .episodes import EpisodeManager
 from .merge import Merger
 from .models import Bar, Episode, RootMessage, market_of
-from .sessions import UsCalendar, crypto_session
+from .sessions import UsCalendar, utc_market_session
 from .sink import Sink
 from .windows import SymbolHistory
 
@@ -74,10 +74,10 @@ class Engine:
     def session_for(self, symbol: str, ts: float) -> str:
         if market_of(symbol) == "US":
             return self.cal.session_at(ts)
-        return crypto_session(ts)
+        return utc_market_session(symbol, ts)
 
     def is_muted(self, symbol: str, now: float) -> bool:
-        for key in (symbol, "*"):
+        for key in (symbol, f"market:{market_of(symbol)}", "*"):
             until = self.mutes.get(key)
             if until is not None and until > now:
                 return True

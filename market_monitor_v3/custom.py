@@ -20,7 +20,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from .models import Bar, OutMsg, display_name, market_of
-from .sessions import ET
+from .sessions import ET, commodity_instance
 from .windows import SymbolHistory
 
 KINDS = ("price_above", "price_below", "move", "day_move", "turnover", "indicator")
@@ -288,6 +288,9 @@ class _Day:
 def day_key(bar: Bar) -> str:
     if market_of(bar.symbol) == "US":
         return datetime.fromtimestamp(bar.ts, ET).strftime("%Y-%m-%d")
+    if market_of(bar.symbol) == "CMDTY":
+        # 大宗商品按 CME 交易日：美东 18:00 以后算下一天
+        return commodity_instance(bar.ts).split(":", 1)[1]
     return datetime.fromtimestamp(bar.ts, UTC).strftime("%Y-%m-%d")
 
 

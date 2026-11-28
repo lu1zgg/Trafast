@@ -9,7 +9,7 @@ from market_monitor_v3.baseline import Baselines, BaselineStat
 from market_monitor_v3.config import WINDOWS, AppConfig, Params
 from market_monitor_v3.engine import Engine
 from market_monitor_v3.models import Bar
-from market_monitor_v3.sessions import ET, UsCalendar, crypto_session
+from market_monitor_v3.sessions import ET, UsCalendar, crypto_session, utc_market_session
 from market_monitor_v3.sink import BufferSink
 
 UTC = UTC
@@ -65,7 +65,7 @@ class Harness:
         return start_ts + 60 * n
 
     def _sess(self, symbol: str, ts: int) -> str:
-        return self.cal.session_at(ts) if symbol.endswith(".US") else crypto_session(ts)
+        return self.cal.session_at(ts) if symbol.endswith(".US") else utc_market_session(symbol, ts)
 
     def bar(self, symbol: str, ts: int, close: float, turnover: float = 1e6, ticks=(3, 10, 30)) -> None:
         now = ts + 61

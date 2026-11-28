@@ -86,7 +86,7 @@ async def test_mute_unmute_and_admin_check(bot):
     await b.handle_update(upd(3, "/mute XYZ"))
     await b.handle_update(upd(4, "/unmute all"))
     texts = [r["text"] for r in await outbox(store)]
-    assert "已静音 MU.US" in texts[0]
+    assert "已静音 MU，" in texts[0]
     assert "没有权限" in texts[1]
     assert "没找到标的" in texts[2]
     assert "已取消全部静音" in texts[3] and hooks.muted == {}

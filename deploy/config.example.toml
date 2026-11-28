@@ -22,7 +22,7 @@ silent_extension_replies = false
 [telegram.route]                # 这个渠道接收哪些消息
 alerts = true                   # 异动告警
 min_level = "L1"                # L1 全部 / L2 及以上 / L3 只要剧烈
-markets = ["US", "CRYPTO"]
+markets = ["US", "CRYPTO", "CMDTY"]
 tradingview = true              # TradingView 转发来的告警
 trend = true                    # 趋势形成 / 结束（按上面的 markets 过滤）
 ops = true                      # 运维消息（断流、恢复、后台登录）
@@ -38,7 +38,7 @@ feedback_buttons = true
 [discord.route]
 alerts = true
 min_level = "L1"
-markets = ["US", "CRYPTO"]
+markets = ["US", "CRYPTO", "CMDTY"]
 tradingview = true
 trend = true
 ops = true
@@ -76,6 +76,8 @@ crypto_min_days = 2
 # 按时段微调（一般不用动）。百分比写法，例如：
 # [rules.overrides.REG]
 # z = 5.5
+# [rules.overrides.CMO]            # 大宗商品开市时段
+# floor_pct = [0.3, 0.6, 1.0]
 # [rules.overrides.ON]
 # floor_pct = [0.8, 1.5, 2.2]
 # bypass_pct = [1.5, 2.5, 2.5]
@@ -130,6 +132,20 @@ grace_s = 5
 [crypto.multipliers]
 ETHUSDT = 1.2
 SOLUSDT = 1.4
+
+[commodities]                   # 大宗商品：Binance USDT-M TradFi 永续合约
+enabled = true
+symbols = ["XAUUSDT", "XAGUSDT", "BZUSDT", "CLUSDT"]   # 黄金、白银、布伦特原油、WTI 原油（还有 XPTUSDT 铂金、XPDUSDT 钯金、COPPERUSDT 铜）
+# 合约 7×24 交易，但只在标的市场开市时检测：美东周日 18:00 – 周五 17:00，每天 17:00–18:00 休市不检测。
+# 休市时指数价不更新、成交额只有开市时的 3%–5%，那时的小幅波动不推。
+ws_url = "wss://fstream.binance.com/market"   # 合约 K 线要走 /market 路由
+rest_url = "https://fapi.binance.com"
+baseline_days = 20
+
+[commodities.multipliers]       # 地板以黄金为基准（0.3% / 0.6% / 1.0%），其他品种按波动放大
+XAGUSDT = 2.0
+BZUSDT = 1.8
+CLUSDT = 1.8
 
 [health]
 daily_report_time = "09:05"     # 北京时间
@@ -210,3 +226,4 @@ enabled = false                 # 周末合约模块：louis 决定不开，本�
 "平台与汽车" = ["GOOGL", "META", "TSLA"]
 "能源与太空" = ["BE", "SPCX"]
 "加密" = ["BTC", "ETH", "SOL"]
+"大宗商品" = ["XAU", "XAG", "BZ", "CL"]

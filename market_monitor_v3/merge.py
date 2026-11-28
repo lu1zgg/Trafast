@@ -18,6 +18,9 @@ from .config import Params
 from .models import LEVEL_RANK, Candidate, Episode, OutMsg, RootMessage, display_name
 from .sink import Sink
 
+# 首发消息键里的市场字母（加密和大宗商品都以 C 开头，大宗商品用 M）
+MARKET_KEY = {"US": "U", "CRYPTO": "C", "CMDTY": "M"}
+
 
 @dataclass
 class OpenAlert:
@@ -84,7 +87,7 @@ class Merger:
                     self._late_join(g, oa, now)
                 return
         delay = mc.fast_batch_delay_s if oa.level == "L3" else mc.batch_delay_s
-        key = f"g{oa.close_ts}{oa.cand.market[0]}{'u' if oa.cand.direction > 0 else 'd'}{display_name(oa.cand.symbol)}"
+        key = f"g{oa.close_ts}{MARKET_KEY.get(oa.cand.market, oa.cand.market[0])}{'u' if oa.cand.direction > 0 else 'd'}{display_name(oa.cand.symbol)}"
         g = Group(key=key, market=oa.cand.market, direction=oa.cand.direction, first_close_ts=oa.close_ts, deadline=now + delay)
         g.members.append(oa)
         oa.ep.root_key = key

@@ -29,6 +29,11 @@ sed "s#/opt/market-monitor#$SRC#g" "$SRC/deploy/mm" >/usr/local/bin/mm
 chmod 0755 /usr/local/bin/mm
 systemctl daemon-reload
 
+echo "==> 迁移配置"
+if [ -f /etc/market-monitor/config.toml ]; then
+    "$SRC/.venv/bin/monitor" migrate-config --config /etc/market-monitor/config.toml
+fi
+
 echo "==> 校验配置"
 mm check-config
 

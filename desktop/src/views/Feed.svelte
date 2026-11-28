@@ -38,6 +38,7 @@
     <option value="">全部市场</option>
     <option value="US">美股</option>
     <option value="CRYPTO">加密</option>
+    <option value="CMDTY">大宗商品</option>
   </select>
   <select bind:value={dir}>
     <option value={0}>涨跌都看</option>

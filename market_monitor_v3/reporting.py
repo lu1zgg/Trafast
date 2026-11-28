@@ -7,7 +7,7 @@ from collections import defaultdict
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from .config import CRYPTO_SESSIONS, SESSION_LABELS, STOCK_SESSIONS, AppConfig, Params
+from .config import COMMODITY_SESSIONS, CRYPTO_SESSIONS, SESSION_LABELS, STOCK_SESSIONS, AppConfig, Params
 from .models import display_name, market_of
 from .patterns import PATTERN_LABELS, PATTERNS
 from .render import pct
@@ -58,9 +58,10 @@ def build_daily_report(store: Store, cfg: AppConfig, params: Params, cal: UsCale
         levels[r["level"]] += r["n"]
     us = sum(pushed[s] for s in STOCK_SESSIONS)
     cr = sum(pushed[s] for s in CRYPTO_SESSIONS)
+    cm = sum(pushed[s] for s in COMMODITY_SESSIONS)
     us_detail = "、".join(f"{SESSION_LABELS[s]} {pushed[s]}" for s in ("PRE", "REG", "POST", "ON") if pushed[s])
     lines.append(
-        f"异动：美股 {us} 个" + (f"（{us_detail}）" if us_detail else "") + f"，加密 {cr} 个；"
+        f"异动：美股 {us} 个" + (f"（{us_detail}）" if us_detail else "") + f"，加密 {cr} 个" + (f"，大宗商品 {cm} 个" if cfg.commodities.enabled else "") + "；"
         f"L3 {levels['L3']}、L2 {levels['L2']}、L1 {levels['L1']}"
     )
 
@@ -161,12 +162,15 @@ def build_daily_report(store: Store, cfg: AppConfig, params: Params, cal: UsCale
             )
         else:
             cov_parts.append("美股 休市")
-    if cfg.crypto.enabled:
+    for on, syms, label in ((cfg.crypto.enabled, cfg.crypto.symbols, "加密"), (cfg.commodities.enabled, cfg.commodities.symbols, "大宗商品")):
+        if not on or not syms:
+            continue
+        marks = ",".join("?" * len(syms))
         n = c.execute(
-            "SELECT COUNT(*) AS n FROM bars_1m WHERE ts>=? AND ts<? AND symbol NOT LIKE '%.US'", (int(start), int(end))
+            f"SELECT COUNT(*) AS n FROM bars_1m WHERE ts>=? AND ts<? AND symbol IN ({marks})", (int(start), int(end), *syms)
         ).fetchone()["n"]
-        exp = (end - start) / 60 * len(cfg.crypto.symbols)
-        cov_parts.append(f"加密 {100 * n / exp:.1f}%" if exp else "加密 —")
+        exp = (end - start) / 60 * len(syms)
+        cov_parts.append(f"{label} {100 * n / exp:.1f}%" if exp else f"{label} —")
     lines.append("数据覆盖：" + "，".join(cov_parts))
 
     restarts = c.execute(

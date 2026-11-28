@@ -279,7 +279,7 @@ async def test_backend_commands(tmp_path):
         st = await rt.control_handle({"cmd": "api_stats"})
         assert st["ok"] and "today" in st
         syms = await rt.control_handle({"cmd": "api_symbols"})
-        assert {x["symbol"] for x in syms["items"]} == set(cfg.crypto.symbols)
+        assert {x["symbol"] for x in syms["items"]} == set(cfg.all_symbols())
         ep = res["items"][0]["episode_id"]
         fb = await rt.control_handle({"cmd": "api_feedback", "episode_id": ep, "value": 1, "user": "api:3"})
         assert fb["ok"] and fb["root_key"]

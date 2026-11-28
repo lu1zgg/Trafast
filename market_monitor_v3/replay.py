@@ -12,12 +12,12 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 from .baseline import Baselines, compute_symbol_baseline
-from .config import CRYPTO_SESSIONS, SESSION_LABELS, STOCK_SESSIONS, AppConfig, Params
+from .config import ALL_SESSIONS, SESSION_LABELS, AppConfig, Params
 from .engine import Engine
 from .models import Bar, Decision, OutMsg, SignalEvent, market_of
 from .patterns import PATTERN_LABELS, PATTERNS
 from .render import to_plain
-from .sessions import ET, UsCalendar, crypto_instance, crypto_session
+from .sessions import ET, UsCalendar, utc_market_instance, utc_market_session
 
 UTC = UTC
 
@@ -86,12 +86,12 @@ class ReplayResult:
         weekdays = self.stats.get("us_weekdays", 0) or 0
         lines = [
             f"回放 {s} → {e} UTC（{days:.1f} 天），规则 {self.rule_version}",
-            f"消息：首发 {len(sends)} 条（美股 {us_sends}，加密 {sum(1 for m in sends if key_market(m.key) == 'CRYPTO')}），回复 {len(replies)} 条，静默编辑 {len(edits)} 次",
+            f"消息：首发 {len(sends)} 条（美股 {us_sends}，加密 {sum(1 for m in sends if key_market(m.key) == 'CRYPTO')}，大宗商品 {sum(1 for m in sends if key_market(m.key) == 'CMDTY')}），回复 {len(replies)} 条，静默编辑 {len(edits)} 次",
             f"平均每天：首发 {len(sends) / days:.1f} 条，加密 {sum(1 for m in sends if key_market(m.key) == 'CRYPTO') / days:.1f} 条"
             + (f"；美股每个交易日 {us_sends / weekdays:.1f} 条" if weekdays else ""),
             "推送的异动：" + "，".join(f"{k} {by_level[k]}" for k in ("L3", "L2", "L1")),
             "按时段：" + "，".join(
-                f"{SESSION_LABELS[k]} {by_sess[k]}" for k in STOCK_SESSIONS + CRYPTO_SESSIONS if by_sess[k]
+                f"{SESSION_LABELS[k]} {by_sess[k]}" for k in ALL_SESSIONS if by_sess[k]
             ),
             "挡下的候选：" + ("，".join(f"{k} {v}" for k, v in l0.most_common()) or "无"),
         ]
@@ -104,7 +104,7 @@ class ReplayResult:
         if not opens:
             return []
         out = []
-        for market, label in (("US", "美股"), ("CRYPTO", "加密")):
+        for market, label in (("US", "美股"), ("CRYPTO", "加密"), ("CMDTY", "大宗商品")):
             evs = [ev for ev in opens if ev.market == market]
             if not evs:
                 continue
@@ -125,7 +125,7 @@ def key_market(key: str) -> str:
     """首发消息的键形如 g{收盘时间}{U|C}{u|d}{代码}；摘要消息以 s 开头。"""
     if key.startswith("g"):
         rest = key[1:].lstrip("0123456789")
-        return "US" if rest.startswith("U") else "CRYPTO"
+        return {"U": "US", "M": "CMDTY"}.get(rest[:1], "CRYPTO")
     return "MIX"
 
 
@@ -161,13 +161,15 @@ def compute_baselines_at(
                 r.baseline_min_sessions,
             )
         else:
-            lo = bisect.bisect_left(idx, at_ts - r.crypto_baseline_days * 86400)
+            cm = market_of(sym) == "CMDTY"
+            days = cfg.commodities.baseline_days if cm else r.crypto_baseline_days
+            lo = bisect.bisect_left(idx, at_ts - days * 86400)
             stats = compute_symbol_baseline(
                 bars[lo:hi],
-                lambda b: crypto_session(b.ts),
-                lambda b: crypto_instance(b.ts),
+                lambda b, s=sym: utc_market_session(s, b.ts),
+                lambda b, s=sym: utc_market_instance(s, b.ts),
                 10_000,
-                r.crypto_min_days,
+                cfg.commodities.min_days if cm else r.crypto_min_days,
             )
         baselines.set_symbol(sym, stats, at_ts)
 
@@ -184,7 +186,7 @@ def run_replay(
     by_sym: dict[str, list[Bar]] = defaultdict(list)
     for b in bars:
         if not b.session:
-            b.session = cal.session_at(b.ts) if market_of(b.symbol) == "US" else crypto_session(b.ts)
+            b.session = cal.session_at(b.ts) if market_of(b.symbol) == "US" else utc_market_session(b.symbol, b.ts)
         by_sym[b.symbol].append(b)
     for sym in by_sym:
         by_sym[sym].sort(key=lambda x: x.ts)

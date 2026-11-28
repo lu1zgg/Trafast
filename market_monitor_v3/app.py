@@ -22,12 +22,12 @@ from .config import SESSION_LABELS, AppConfig, Params, Secrets, channel_routes, 
 from .control import ControlServer
 from .engine import Engine
 from .health import Health, sd_notify
-from .models import Bar, OutMsg, display_name, market_of
+from .models import Bar, OutMsg, display_name, market_of, target_label
 from .notifiers.discord import DiscordClient, DiscordGateway, DiscordNotifier
 from .outbox import ChatRef, OutboxSender
 from .render import arrow, pct
 from .reporting import build_daily_report
-from .sessions import ET, UsCalendar, crypto_instance, crypto_session
+from .sessions import ET, UsCalendar, commodity_session, crypto_session, utc_market_instance
 from .sink import BufferSink
 from .store import Store, bar_from_row, connect
 from .telegram import TelegramClient
@@ -83,17 +83,19 @@ def compute_baselines_sync(
                     r.baseline_min_sessions,
                 )
             else:
-                since = int(now) - r.crypto_baseline_days * 86400
+                cm = market_of(sym) == "CMDTY"
+                days = cfg.commodities.baseline_days if cm else r.crypto_baseline_days
+                since = int(now) - days * 86400
                 rows = conn.execute(
                     "SELECT * FROM bars_1m WHERE symbol=? AND ts>=? AND ts<? ORDER BY ts", (sym, since, int(now))
                 ).fetchall()
                 bars = [bar_from_row(x) for x in rows]
                 out[sym] = compute_symbol_baseline(
                     bars,
-                    lambda b: crypto_session(b.ts),
-                    lambda b: crypto_instance(b.ts),
+                    (lambda b: commodity_session(b.ts)) if cm else (lambda b: crypto_session(b.ts)),
+                    (lambda b, s=sym: utc_market_instance(s, b.ts)),
                     10_000,
-                    r.crypto_min_days,
+                    cfg.commodities.min_days if cm else r.crypto_min_days,
                 )
     finally:
         conn.close()
@@ -156,6 +158,7 @@ class Runtime:
         self.tv_throttle = Throttle(cfg.tradingview.max_per_min, cfg.tradingview.dedup_s)
         self.exit_code = 0
         self.binance: Any = None
+        self.binance_fut: Any = None  # 大宗商品（Binance USDT-M 永续）
         self.lb: Any = None
         self.ticks: Any = None  # V4 P2 逐笔层（TickHub）
         self.binance_trades: Any = None
@@ -218,6 +221,13 @@ class Runtime:
         )
         if self.binance is not None:
             self.health.register("binance", "CRYPTO")
+        if cfg.commodities.enabled:
+            from .feeds.binance_spot import BinanceFuturesFeed
+
+            self.binance_fut = BinanceFuturesFeed(
+                cfg.commodities, self._emit, self._seen, stale_s=cfg.health.binance_stale_s, clock=self.clock
+            )
+            self.health.register("binance-futures", "CMDTY")
         if cfg.stocks.enabled:
             from .feeds.longbridge import LongbridgeFeed
 
@@ -251,17 +261,19 @@ class Runtime:
         await self._restore()
         await self._start_ticks()
 
-        if self.binance is not None:
+        for feed, days in ((self.binance, cfg.rules.crypto_baseline_days), (self.binance_fut, cfg.commodities.baseline_days)):
+            if feed is None:
+                continue
             try:
-                n = await self.binance.warmup(
+                n = await feed.warmup(
                     lambda bars: self.store.call(Store.insert_bars, bars),
                     lambda sym, since: self.store.call(Store.first_bar_ts, sym, since),
                     lambda sym: self.store.call(Store.last_bar_ts, sym),
-                    cfg.rules.crypto_baseline_days,
+                    days,
                 )
-                log.info("Binance 预热完成，新增 %d 根 K 线", n)
+                log.info("%s 预热完成，新增 %d 根 K 线", feed.label, n)
             except Exception as e:  # noqa: BLE001
-                log.warning("Binance 预热失败（只用直通线，直到基线够数）：%s", type(e).__name__)
+                log.warning("%s 预热失败（只用直通线，直到基线够数）：%s", feed.label, type(e).__name__)
         await self.recompute_baselines(cfg.all_symbols())
 
     async def _restore(self) -> None:
@@ -277,6 +289,8 @@ class Runtime:
             if last is not None:
                 if self.binance is not None and market_of(sym) == "CRYPTO":
                     self.binance.last_ts[sym] = last
+                if self.binance_fut is not None and market_of(sym) == "CMDTY":
+                    self.binance_fut.last_ts[sym] = last
                 if self.lb is not None and market_of(sym) == "US":
                     self.lb.last_ts[sym] = last
         eps = await self.store.call(Store.active_episodes)
@@ -476,6 +490,7 @@ class Runtime:
         t_maint = next_at(now, BJ, cfg.storage.maintenance_time)
         t_stock_bl = next_at(now, ET, "20:05")
         t_crypto_bl = next_at(now, UTC, "00:05")
+        t_cm_bl = next_at(now, ET, "17:05")
         t_mutes = now
         while not self.stop.is_set():
             try:
@@ -499,6 +514,11 @@ class Runtime:
                     t_crypto_bl = next_at(now, UTC, "00:05")
                     if cfg.crypto.enabled:
                         await self.recompute_baselines(cfg.crypto.symbols)
+                if now >= t_cm_bl:
+                    # 大宗商品每天美东 17:05（每日休市那一小时里）重算
+                    t_cm_bl = next_at(now, ET, "17:05")
+                    if cfg.commodities.enabled:
+                        await self.recompute_baselines(cfg.commodities.symbols)
                 if now >= t_maint:
                     t_maint = next_at(now, BJ, cfg.storage.maintenance_time)
                     msg = await self.store.call(
@@ -564,14 +584,15 @@ class Runtime:
         last_end = rows[-1][1] if rows else None
         end15 = now - now % 900
         bk = self.trend.bucketer(sym)
-        if market_of(sym) == "CRYPTO" and self.binance is not None:
+        feed = {"CRYPTO": self.binance, "CMDTY": self.binance_fut}.get(market_of(sym))
+        if feed is not None:
             gaps = []
             if first is None or first > since + 86400:
                 gaps.append((since, first if first is not None else end15))
             if last_end is not None and last_end < end15:
                 gaps.append((last_end, end15))
             for a, b in gaps:
-                for r in await self.binance.fetch_rows(sym, "15m", a, b):
+                for r in await feed.fetch_rows(sym, "15m", a, b):
                     ts = int(r[0]) // 1000
                     fetched.append((sym, Candle(ts, ts + 900, float(r[1]), float(r[2]), float(r[3]), float(r[4]), float(r[7]))))
         elif market_of(sym) == "US" and self.lb is not None and (first is None or first > since + 3 * 86400):
@@ -718,6 +739,12 @@ class Runtime:
             age = self.health.age("binance", now)
             src = f"Binance {age:.0f} 秒前有数据" if age is not None else "Binance 尚无数据"
             lines.append(f"加密：{SESSION_LABELS[crypto_session(now)]}｜{src}")
+        if self.cfg.commodities.enabled:
+            age = self.health.age("binance-futures", now)
+            src = f"Binance 合约 {age:.0f} 秒前有数据" if age is not None else "Binance 合约尚无数据"
+            sess = commodity_session(now)
+            note = "" if sess == "CMO" else "（休市不检测）"
+            lines.append(f"大宗商品：{SESSION_LABELS[sess]}{note}｜{src}")
         eps = self.engine.episodes.active()
         if eps:
             parts = []
@@ -794,7 +821,7 @@ class Runtime:
         items = []
         for k, until in sorted(self.engine.mutes.items()):
             if until > now:
-                name = "全部" if k == "*" else display_name(k)
+                name = target_label(k)
                 items.append(f"{name} 至 {datetime.fromtimestamp(until, BJ).strftime('%m-%d %H:%M')}")
         return "静音：" + ("，".join(items) if items else "无")
 
@@ -805,6 +832,16 @@ class Runtime:
             if cand in syms:
                 return cand
         return None
+
+    def resolve_mute_target(self, s: str) -> str | None:
+        """标的代码，或者整个市场（美股 / 加密 / 大宗商品，也接受 market:CMDTY 这种写法）。"""
+        from .models import MARKET_ALIASES
+
+        t = s.strip()
+        m = MARKET_ALIASES.get(t.removeprefix("market:").upper())
+        if m is not None:
+            return f"market:{m}"
+        return self.resolve_symbol(t)
 
     async def mute(self, target: str, until: float, by: str) -> None:
         assert self.engine is not None
@@ -907,7 +944,7 @@ class Runtime:
             self.request_restart()
             return {"ok": True}
         if cmd == "mute":
-            target = "*" if req.get("target") in ("*", "all") else self.resolve_symbol(str(req.get("target") or ""))
+            target = "*" if req.get("target") in ("*", "all") else self.resolve_mute_target(str(req.get("target") or ""))
             if target is None:
                 return {"ok": False, "error": "没找到标的"}
             until = self.clock() + max(60, min(7 * 86400, int(req.get("seconds") or 3600)))
@@ -915,7 +952,7 @@ class Runtime:
             return {"ok": True, "target": target, "until": until}
         if cmd == "unmute":
             t = req.get("target")
-            n = await self.unmute(None if t in (None, "*", "all") else self.resolve_symbol(str(t)) or str(t))
+            n = await self.unmute(None if t in (None, "*", "all") else self.resolve_mute_target(str(t)) or str(t))
             return {"ok": True, "cleared": n}
         if cmd == "types":
             from .patterns import PATTERN_LABELS
@@ -1007,6 +1044,8 @@ class Runtime:
             feeds["longbridge"] = self.health.age("longbridge", now)
         if self.cfg.crypto.enabled:
             feeds["binance"] = self.health.age("binance", now)
+        if self.cfg.commodities.enabled:
+            feeds["binance-futures"] = self.health.age("binance-futures", now)
         n, age = await self.store.call(Store.outbox_backlog, now)
         return {
             "version": __version__,
@@ -1078,6 +1117,8 @@ class Runtime:
             self.control = None
         if self.binance is not None:
             coros.append(self.binance.run(self.stop))
+        if self.binance_fut is not None:
+            coros.append(self.binance_fut.run(self.stop))
         if self.binance_trades is not None:
             coros.append(self.binance_trades.run(self.stop))
         if self.lb is not None:
@@ -1086,6 +1127,7 @@ class Runtime:
         if self.trend is not None:
             # 加密的趋势预热在后台补数据，不挡启动；美股在长桥预热之后做（没有长桥就只用库里的数据）
             coros.append(self.trend_bootstrap("CRYPTO"))
+            coros.append(self.trend_bootstrap("CMDTY"))
             if self.lb is None:
                 coros.append(self.trend_bootstrap("US"))
         self.tasks = [asyncio.create_task(c) for c in coros]
@@ -1096,6 +1138,8 @@ class Runtime:
                 markets.append(f"美股 {len(self.cfg.stocks.symbols)} 只")
             if self.cfg.crypto.enabled:
                 markets.append("加密 " + "、".join(display_name(s) for s in self.cfg.crypto.symbols))
+            if self.cfg.commodities.enabled:
+                markets.append("大宗商品 " + "、".join(display_name(s) for s in self.cfg.commodities.symbols))
             await self.health.ops(
                 f"start:{int(self.clock())}",
                 f"V3 {__version__} 已启动｜{self.params.label}档 {self.params.rule_version}｜" + "，".join(markets),

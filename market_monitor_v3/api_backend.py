@@ -71,7 +71,7 @@ async def handle(rt: "Runtime", cmd: str, req: dict[str, Any]) -> dict[str, Any]
             q.update(
                 market=market_of(sym),
                 groups=rt.cfg.groups_of(sym),
-                muted=sym in muted or "*" in muted,
+                muted=sym in muted or "*" in muted or f"market:{market_of(sym)}" in muted,
                 session_label=SESSION_LABELS.get(q["session"] or "", ""),
             )
             items.append(q)

@@ -27,7 +27,7 @@ from pydantic import ValidationError
 from tomlkit.items import Table
 
 from .. import __version__, render
-from ..config import CRYPTO_SESSIONS, PRESETS, SESSION_LABELS, STOCK_SESSIONS, AppConfig, Params
+from ..config import COMMODITY_SESSIONS, CRYPTO_SESSIONS, PRESETS, SESSION_LABELS, STOCK_SESSIONS, AppConfig, Params
 from ..control import ControlUnavailable, control_call
 from ..models import display_name
 from ..notifiers.discord import DiscordClient, DiscordNotifier
@@ -54,7 +54,7 @@ NAV = [
     ("/system", "系统"),
     ("/history", "历史与审计"),
 ]
-SESSION_ORDER = [*STOCK_SESSIONS, *CRYPTO_SESSIONS]
+SESSION_ORDER = [*STOCK_SESSIONS, *CRYPTO_SESSIONS, *COMMODITY_SESSIONS]
 AUDIT_LABELS = {
     "login": "登录",
     "logout": "退出",
@@ -191,7 +191,9 @@ def normalize_symbol(market: str, raw: str) -> str:
     if market == "US":
         return s if s.endswith(".US") else s + ".US"
     if s.endswith(".US"):
-        raise ValueError("加密货币代码不能以 .US 结尾")
+        raise ValueError("加密货币和大宗商品代码不能以 .US 结尾")
+    if market == "CMDTY":
+        return s if s.endswith("USDT") else s + "USDT"
     return s if s.endswith(("USDT", "USDC", "FDUSD")) else s + "USDT"
 
 
@@ -439,6 +441,20 @@ def create_app(paths: WebPaths, control_socket: str | None = None, fail_delay_s:
         text, _, cfg = load()
         return page(request, s, "symbols.html", cfg=cfg, rev=digest(text))
 
+    async def binance_commodity_exists(cfg: AppConfig, symbol: str) -> bool | None:
+        """Binance USDT-M 合约里有没有这个大宗商品永续（underlyingSubType 含 COMMODITY）。"""
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as c:
+                r = await c.get(f"{cfg.commodities.rest_url.rstrip('/')}/fapi/v1/exchangeInfo")
+            if r.status_code != 200:
+                return None
+            for it in r.json().get("symbols", []):
+                if it.get("symbol") == symbol:
+                    return it.get("status") == "TRADING" and "COMMODITY" in (it.get("underlyingSubType") or [])
+            return False
+        except (httpx.HTTPError, ValueError):
+            return None
+
     async def binance_symbol_exists(cfg: AppConfig, symbol: str) -> bool | None:
         try:
             async with httpx.AsyncClient(timeout=5.0) as c:
@@ -455,7 +471,9 @@ def create_app(paths: WebPaths, control_socket: str | None = None, fail_delay_s:
     async def symbols_add(request: Request) -> Response:
         s = need_login(request)
         form = await form_checked(request, s)
-        market = "US" if form.get("market") == "US" else "CRYPTO"
+        market = str(form.get("market") or "")
+        if market not in ("US", "CRYPTO", "CMDTY"):
+            market = "CRYPTO"
         try:
             sym = normalize_symbol(market, str(form.get("symbol") or ""))
         except ValueError as e:
@@ -469,9 +487,21 @@ def create_app(paths: WebPaths, control_socket: str | None = None, fail_delay_s:
                 return RedirectResponse("/symbols", status_code=303)
             if exists is None:
                 flash(s, f"暂时连不上 Binance，没能核对 {sym} 是否存在，先按你填的保存", "warn")
+        if market == "CMDTY":
+            exists = await binance_commodity_exists(cfg, sym)
+            if exists is False:
+                flash(s, f"Binance 合约里没有 {sym} 这个大宗商品永续（例如 XAUUSDT、XAGUSDT、BZUSDT、CLUSDT）", "err")
+                return RedirectResponse("/symbols", status_code=303)
+            if exists is None:
+                flash(s, f"暂时连不上 Binance，没能核对 {sym} 是否存在，先按你填的保存", "warn")
 
         def mutate(doc: Any) -> None:
-            t = _tbl(doc, "stocks" if market == "US" else "crypto")
+            t = _tbl(doc, {"US": "stocks", "CRYPTO": "crypto", "CMDTY": "commodities"}[market])
+            if market == "CMDTY" and "symbols" not in t:
+                # 旧配置没写 [commodities]：先把默认列表写进去，免得只剩新加的这一个
+                from ..config import DEFAULT_COMMODITIES
+
+                t["symbols"] = list(DEFAULT_COMMODITIES)
             cur = [str(x) for x in t.get("symbols", [])]
             if sym in cur:
                 raise ValueError(f"{sym} 已经在列表里")
@@ -487,7 +517,8 @@ def create_app(paths: WebPaths, control_socket: str | None = None, fail_delay_s:
         s = need_login(request)
         form = await form_checked(request, s)
         sym = str(form.get("symbol") or "")
-        market = "stocks" if sym.endswith(".US") else "crypto"
+        _, _, cfg0 = load()
+        market = "stocks" if sym.endswith(".US") else "commodities" if sym in cfg0.commodities.symbols else "crypto"
 
         def mutate(doc: Any) -> None:
             t = _tbl(doc, market)
@@ -511,7 +542,7 @@ def create_app(paths: WebPaths, control_socket: str | None = None, fail_delay_s:
         _, _, cfg = load()
 
         def mutate(doc: Any) -> None:
-            for market, key in (("stocks", cfg.stocks), ("crypto", cfg.crypto)):
+            for market, key in (("stocks", cfg.stocks), ("crypto", cfg.crypto), ("commodities", cfg.commodities)):
                 t = _tbl(doc, market)
                 t["enabled"] = _bool(form, f"{market}_enabled")
                 wanted: dict[str, float] = {}
@@ -609,7 +640,11 @@ def create_app(paths: WebPaths, control_socket: str | None = None, fail_delay_s:
         text, _, cfg = load()
         st = await monitor("trend")
         live = {it["symbol"]: it for it in (st or {}).get("items") or []}
-        groups = [("美股", "正常盘 09:30–16:00 美东", cfg.stocks.symbols), ("加密货币", "全天 24 小时", cfg.crypto.symbols)]
+        groups = [
+            ("美股", "正常盘 09:30–16:00 美东", cfg.stocks.symbols),
+            ("加密货币", "全天 24 小时", cfg.crypto.symbols),
+            ("大宗商品", "按 UTC 分桶，含周末（Binance 合约 7×24）", cfg.commodities.symbols),
+        ]
         return page(request, s, "trend.html", cfg=cfg, rev=digest(text), st=st, groups=groups, live=live)
 
     @app.post("/trend")
@@ -766,7 +801,7 @@ def create_app(paths: WebPaths, control_socket: str | None = None, fail_delay_s:
         t["alerts"] = _bool(form, f"{prefix}_alerts")
         lvl = str(form.get(f"{prefix}_min_level") or "L1")
         t["min_level"] = lvl if lvl in ("L1", "L2", "L3") else "L1"
-        markets = [m for m in ("US", "CRYPTO") if _bool(form, f"{prefix}_m_{m}")]
+        markets = [m for m in ("US", "CRYPTO", "CMDTY") if _bool(form, f"{prefix}_m_{m}")]
         t["markets"] = markets
         t["tradingview"] = _bool(form, f"{prefix}_tradingview")
         t["trend"] = _bool(form, f"{prefix}_trend")

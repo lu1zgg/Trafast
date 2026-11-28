@@ -102,7 +102,7 @@ def b(s: str) -> str:
 
 def times_line(ts: float, market: str) -> str:
     bj = datetime.fromtimestamp(ts, BJ).strftime("%m-%d %H:%M")
-    if market == "US":
+    if market in ("US", "CMDTY"):
         other = "美东 " + datetime.fromtimestamp(ts, ET).strftime("%H:%M")
     else:
         other = "UTC " + datetime.fromtimestamp(ts, UTC).strftime("%H:%M")

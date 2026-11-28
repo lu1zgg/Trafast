@@ -25,7 +25,7 @@
     <tr><th>时段</th><th>地板 1/5/15 分钟（%）</th><th class="num">z 门槛</th><th>直通线 1/5/15 分钟（%）</th></tr>
     {% for sess in sessions %}{% set t = params.sessions[sess] %}
     <tr>
-      <td>{{ '美股' if sess in stock_sessions else '加密' }} · {{ labels[sess] }}</td>
+      <td>{{ '美股' if sess in stock_sessions else ('大宗商品' if sess.startswith('CM') else '加密') }} · {{ labels[sess] }}</td>
       <td class="mono">{{ pcts(t.floor) }}</td>
       <td class="num mono">{{ '%g'|format(t.z) }}</td>
       <td class="mono">{{ pcts(t.bypass) }}</td>
@@ -45,7 +45,7 @@
     <tr><th>时段</th><th>地板（%）</th><th>z 门槛</th><th>直通线（%）</th></tr>
     {% for sess in sessions %}{% set ov = cfg.rules.overrides.get(sess) %}{% set b = base.sessions[sess] %}
     <tr>
-      <td>{{ '美股' if sess in stock_sessions else '加密' }} · {{ labels[sess] }}</td>
+      <td>{{ '美股' if sess in stock_sessions else ('大宗商品' if sess.startswith('CM') else '加密') }} · {{ labels[sess] }}</td>
       <td><input type="text" name="{{ sess }}_floor" value="{{ nums(ov.floor_pct) if ov else '' }}" placeholder="{{ pcts(b.floor)|replace(' / ', ', ') }}" aria-label="{{ labels[sess] }} 地板"></td>
       <td><input class="narrow" type="number" step="0.5" min="1" name="{{ sess }}_z" value="{{ '%g'|format(ov.z) if ov and ov.z is not none else '' }}" placeholder="{{ '%g'|format(b.z) }}" aria-label="{{ labels[sess] }} z"></td>
       <td><input type="text" name="{{ sess }}_bypass" value="{{ nums(ov.bypass_pct) if ov else '' }}" placeholder="{{ pcts(b.bypass)|replace(' / ', ', ') }}" aria-label="{{ labels[sess] }} 直通线"></td>

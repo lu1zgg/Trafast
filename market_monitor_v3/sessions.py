@@ -6,6 +6,10 @@
   盘后 POST 16:00–20:00（提前收盘日 13:00–17:00）
   夜盘 ON   20:00–次日 04:00，只有“次日”是交易日时才开（周日晚到周四晚）
 加密货币按 UTC 分工作日 CWD 和周末 CWE。
+大宗商品（Binance TradFi 永续，合约本身 7×24 交易）按标的市场（CME Globex / 伦敦金银）的时间分：
+  开市 CMO  美东周日 18:00 – 周五 17:00，每天 17:00–18:00 除外
+  休市 CMC  每天 17:00–18:00 和周末。休市时指数价不更新，合约只在 Binance 盘口上漂，成交额只有开市时的 3%–5%，
+            不做检测（和 louis 2026-11-22 对周末小插针的反馈一致）。
 
 休市日先用内置表，接通长桥后每天用 trading_days 接口刷新（以交易所为准）。
 """
@@ -64,6 +68,40 @@ def crypto_session(ts: float) -> str:
 def crypto_instance(ts: float) -> str:
     d = datetime.fromtimestamp(ts, UTC).date()
     return f"{'CWE' if d.weekday() >= 5 else 'CWD'}:{d.isoformat()}"
+
+
+CM_BREAK_START = 17 * 60
+CM_BREAK_END = 18 * 60
+
+
+def commodity_session(ts: float) -> str:
+    dt = datetime.fromtimestamp(ts, ET)
+    wd, m = dt.weekday(), dt.hour * 60 + dt.minute  # 周一 = 0
+    if wd == 5 or (wd == 4 and m >= CM_BREAK_START) or (wd == 6 and m < CM_BREAK_END):
+        return "CMC"
+    if CM_BREAK_START <= m < CM_BREAK_END:
+        return "CMC"
+    return "CMO"
+
+
+def commodity_instance(ts: float) -> str:
+    """交易日按 CME 习惯：美东 18:00 以后算下一个交易日。"""
+    dt = datetime.fromtimestamp(ts, ET)
+    d = dt.date() + timedelta(days=1) if dt.hour * 60 + dt.minute >= CM_BREAK_END else dt.date()
+    return f"{commodity_session(ts)}:{d.isoformat()}"
+
+
+def utc_market_session(symbol: str, ts: float) -> str:
+    """加密货币和大宗商品（不需要美股日历的市场）的时段。"""
+    from .models import market_of
+
+    return commodity_session(ts) if market_of(symbol) == "CMDTY" else crypto_session(ts)
+
+
+def utc_market_instance(symbol: str, ts: float) -> str:
+    from .models import market_of
+
+    return commodity_instance(ts) if market_of(symbol) == "CMDTY" else crypto_instance(ts)
 
 
 class UsCalendar:

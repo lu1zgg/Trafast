@@ -13,20 +13,23 @@
       <select id="add-market" name="market">
         <option value="US">美股（长桥）</option>
         <option value="CRYPTO">加密货币现货（Binance）</option>
+        <option value="CMDTY">大宗商品永续（Binance 合约）</option>
       </select>
     </div>
     <div class="field grow">
       <label for="add-symbol">代码</label>
-      <input type="text" id="add-symbol" name="symbol" placeholder="美股填 TSLA，加密填 BTC 或 BTCUSDT" required autocomplete="off" autocapitalize="characters" spellcheck="false">
+      <input type="text" id="add-symbol" name="symbol" placeholder="美股填 TSLA，加密填 BTC，大宗商品填 XAU / CL" required autocomplete="off" autocapitalize="characters" spellcheck="false">
     </div>
     <button type="submit">添加</button>
   </form>
   <p class="small muted">美股自动补 <code>.US</code>，加密货币不写计价币时默认 USDT，并会先到 Binance 核对交易对是否存在。
+    大宗商品是 Binance U 本位的 TradFi 永续（XAU 黄金、XAG 白银、XPT 铂金、XPD 钯金、COPPER 铜、BZ 布伦特、CL WTI），
+    只在标的市场开市时检测（美东周日 18:00 – 周五 17:00，每天 17:00–18:00 和周末不检测）。
     新标的需要先积累几天历史数据作为基线，期间不会报警。添加或删除后监控会自动重启（约 15 秒）。</p>
 </div>
 
 {# 系数输入框通过 form="settings" 归属到底部的设置表单，删除按钮各自是独立的小表单 #}
-{% for market, title, mc in [("stocks", "美股", cfg.stocks), ("crypto", "加密货币", cfg.crypto)] %}
+{% for market, title, mc in [("stocks", "美股", cfg.stocks), ("crypto", "加密货币", cfg.crypto), ("commodities", "大宗商品", cfg.commodities)] %}
 <div class="card">
   <div class="card-head">
     <h2>{{ title }} <span class="muted small">{{ mc.symbols|length }} 个</span></h2>
@@ -59,6 +62,7 @@
     {{ check("stocks_enabled", cfg.stocks.enabled, "监控美股", "关掉后不连长桥") }}
     {{ check("overnight", cfg.stocks.overnight, "美股夜盘也监控", "北京时间白天的夜盘时段（需要长桥账户有夜盘行情权限）") }}
     {{ check("crypto_enabled", cfg.crypto.enabled, "监控加密货币") }}
+    {{ check("commodities_enabled", cfg.commodities.enabled, "监控大宗商品", "黄金、白银、原油等 Binance 合约；周末和每日休市时段不检测") }}
     <p class="small muted">敏感度系数乘在“地板”门槛上：1 是默认，大于 1 更不容易报警（适合波动大的标的），小于 1 更灵敏。上面表格里改过的系数和这里的开关一起保存。</p>
     <div class="buttons"><button type="submit">保存</button></div>
   </form>
