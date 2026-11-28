@@ -7,6 +7,7 @@
   import Ticker from "./views/Ticker.svelte";
   import TickerCrawl from "./views/TickerCrawl.svelte";
   import Icon from "./views/Icon.svelte";
+  import logo from "./assets/logo.svg";
   import Feed from "./views/Feed.svelte";
   import Symbols from "./views/Symbols.svelte";
   import Detail from "./views/Detail.svelte";
@@ -78,9 +79,7 @@
     <aside class="sidebar glass">
       <div class="lights" data-tauri-drag-region></div>
       <div class="brand" data-tauri-drag-region>
-        <span class="logo" aria-hidden="true">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13h3.5l2.5-6 4 11 3-8 1.5 3H21" /></svg>
-        </span>
+        <img class="logo" src={logo} alt="" />
         <span>Trafast</span>
       </div>
       <nav>
@@ -170,13 +169,10 @@
     padding: 0 6px 12px;
   }
   .logo {
-    width: 22px;
-    height: 22px;
+    width: 24px;
+    height: 24px;
     border-radius: 7px;
-    display: grid;
-    place-items: center;
-    background: linear-gradient(145deg, #3aa0ff, #0060df);
-    box-shadow: 0 2px 6px rgba(0, 96, 223, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.35);
+    box-shadow: 0 2px 6px rgba(11, 24, 52, 0.35), 0 0 0 0.5px rgba(255, 255, 255, 0.15) inset;
   }
   nav {
     display: flex;
